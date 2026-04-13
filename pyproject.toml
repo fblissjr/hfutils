@@ -1,17 +1,22 @@
 [project]
 name = "hfutils"
-version = "0.1.0"
-author = "Fred Bliss"
-description = "HF utilities"
+version = "0.2.0"
+description = "Local model file toolkit: inspect, merge, and scan safetensors/GGUF files"
 readme = "README.md"
 requires-python = ">=3.13"
+authors = [{name = "Fred Bliss"}]
 dependencies = [
-    "huggingface-hub[hf-xet]>=1.3.4",
-    "tqdm>=4.67.1",
+    "typer-slim>=0.21",
+    "orjson>=3.10",
+    "rich>=13.0",
 ]
 
 [project.scripts]
-hfutils = "hfutils.cli:main"
+hfutils = "hfutils.cli:app"
+
+[project.optional-dependencies]
+merge = ["safetensors[torch]"]
+all = ["safetensors[torch]"]
 
 [build-system]
 requires = ["hatchling"]
@@ -20,5 +25,15 @@ build-backend = "hatchling.build"
 [tool.uv]
 package = true
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "safetensors[torch]>=0.7.0",
+    "gguf>=0.18.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hfutils"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
