@@ -3,9 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 .DS_Store
-.claude/
-
-# etc
+.claude/*
+!.claude/skills/
 .claude/settings.local.json
 internal/
 *.duckdb

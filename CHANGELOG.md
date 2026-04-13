@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- CivitAI integration: `hfutils civitai search`, `civitai info`, `civitai dl`
+- Shared download module with rich progress bars and resume support
+- safetensors[torch] now a default dependency (no longer optional)
+- providers/ directory for external service integrations
+
 ## 0.2.0
 
 - Rebuilt as local model file toolkit (dropped HF download/collection features -- use `hf` CLI for those)

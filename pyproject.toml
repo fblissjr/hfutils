@@ -1,22 +1,19 @@
 [project]
 name = "hfutils"
-version = "0.2.0"
-description = "Local model file toolkit: inspect, merge, and scan safetensors/GGUF files"
+version = "0.4.0"
+description = "Local model file toolkit"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{name = "Fred Bliss"}]
 dependencies = [
-    "typer-slim>=0.21",
+    "typer>=0.21",
     "orjson>=3.10",
     "rich>=13.0",
+    "safetensors[torch]",
 ]
 
 [project.scripts]
 hfutils = "hfutils.cli:app"
-
-[project.optional-dependencies]
-merge = ["safetensors[torch]"]
-all = ["safetensors[torch]"]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,7 +25,6 @@ package = true
 [dependency-groups]
 dev = [
     "pytest>=8.0",
-    "safetensors[torch]>=0.7.0",
     "gguf>=0.18.0",
 ]
 
