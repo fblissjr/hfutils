@@ -1,34 +1,10 @@
 """Tests for architecture detection from tensor names."""
 
-import struct
-from pathlib import Path
-
-import orjson
-import pytest
-
-from hfutils.inspect.architecture import detect_architecture, ArchitectureInfo
-
-
-def _make_safetensors_header(tmp_path: Path, tensor_names: list[str], metadata: dict | None = None) -> Path:
-    """Create a minimal safetensors file with given tensor names (all F16 [1] shape)."""
-    header_dict = {}
-    if metadata:
-        header_dict["__metadata__"] = metadata
-    offset = 0
-    for name in tensor_names:
-        header_dict[name] = {"dtype": "F16", "shape": [1], "data_offsets": [offset, offset + 2]}
-        offset += 2
-    header_bytes = orjson.dumps(header_dict)
-    path = tmp_path / "model.safetensors"
-    with open(path, "wb") as f:
-        f.write(struct.pack("<Q", len(header_bytes)))
-        f.write(header_bytes)
-        f.write(b"\x00" * offset)
-    return path
+from hfutils.inspect.architecture import detect_architecture
 
 
 class TestDetectDiffusionModels:
-    def test_flux(self, tmp_path):
+    def test_flux(self):
         names = [
             "double_blocks.0.img_attn.qkv.weight",
             "double_blocks.0.txt_attn.qkv.weight",
@@ -39,7 +15,7 @@ class TestDetectDiffusionModels:
         assert result.family == "Flux"
         assert result.adapter_type is None
 
-    def test_sdxl(self, tmp_path):
+    def test_sdxl(self):
         names = [
             "conditioner.embedders.0.transformer.text_model.embeddings.weight",
             "conditioner.embedders.1.model.ln_final.weight",
@@ -48,7 +24,7 @@ class TestDetectDiffusionModels:
         result = detect_architecture(names)
         assert result.family == "SDXL"
 
-    def test_sd3(self, tmp_path):
+    def test_sd3(self):
         names = [
             "text_encoders.clip_g.transformer.text_model.embeddings.weight",
             "text_encoders.clip_l.transformer.text_model.embeddings.weight",
@@ -59,7 +35,7 @@ class TestDetectDiffusionModels:
         result = detect_architecture(names)
         assert result.family == "SD3"
 
-    def test_sd15(self, tmp_path):
+    def test_sd15(self):
         names = [
             "cond_stage_model.transformer.text_model.embeddings.position_embedding.weight",
             "model.diffusion_model.input_blocks.0.0.weight",
@@ -68,7 +44,6 @@ class TestDetectDiffusionModels:
         ]
         result = detect_architecture(names)
         assert result.family == "Stable Diffusion"
-
 
     def test_hunyuan_video(self):
         names = [

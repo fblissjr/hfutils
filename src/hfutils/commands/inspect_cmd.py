@@ -12,24 +12,31 @@ from hfutils.inspect.common import SafetensorsHeader, format_size, format_params
 console = Console()
 
 
-def _display_safetensors(header: SafetensorsHeader, path: Path, detail: bool) -> None:
+def _format_arch(arch) -> str | None:
+    """Format architecture info as a string, or None if unknown."""
+    parts = []
+    if arch.family != "Unknown":
+        parts.append(arch.family)
+    if arch.adapter_type:
+        parts.append(arch.adapter_type)
+    return " / ".join(parts) if parts else None
+
+
+def _display_safetensors(header: SafetensorsHeader, path: Path, detail: bool, arch=None) -> None:
     """Display safetensors inspection results."""
     from hfutils.inspect.architecture import detect_architecture
 
-    arch = detect_architecture(
-        [t.name for t in header.tensors],
-        metadata=header.metadata if header.metadata else None,
-    )
+    if arch is None:
+        arch = detect_architecture(
+            [t.name for t in header.tensors],
+            metadata=header.metadata if header.metadata else None,
+        )
 
     console.print(f"\n[bold]{path.name}[/bold]")
 
-    arch_parts = []
-    if arch.family != "Unknown":
-        arch_parts.append(arch.family)
-    if arch.adapter_type:
-        arch_parts.append(arch.adapter_type)
-    if arch_parts:
-        console.print(f"  Architecture: {' / '.join(arch_parts)}")
+    arch_str = _format_arch(arch)
+    if arch_str:
+        console.print(f"  Architecture: {arch_str}")
 
     console.print(f"  Tensors: {len(header.tensors)}")
     console.print(f"  Parameters: {format_params(header.total_params)}")
@@ -98,7 +105,6 @@ def _display_directory(dir_info, detail: bool) -> None:
 
     console.print(f"\n[bold]{dir_info.path.name}/[/bold]")
 
-    # Config info
     if dir_info.config:
         c = dir_info.config
         if "model_type" in c:
@@ -116,7 +122,6 @@ def _display_directory(dir_info, detail: bool) -> None:
             if key in c:
                 console.print(f"  {label}: {c[key]:,}")
 
-    # Model files summary
     if not dir_info.model_files:
         if not dir_info.config:
             console.print("  No model files or config found.")
@@ -128,35 +133,27 @@ def _display_directory(dir_info, detail: bool) -> None:
     if dir_info.sharded:
         console.print(f"  Sharded: {dir_info.shard_count} shards")
 
-    # Aggregate safetensors info
     if dir_info.safetensors_headers:
-        all_tensors = []
-        for h in dir_info.safetensors_headers:
-            all_tensors.extend(h.tensors)
+        total_params = sum(h.total_params for h in dir_info.safetensors_headers)
+        total_bytes = sum(h.total_size_bytes for h in dir_info.safetensors_headers)
+        total_tensors = sum(len(h.tensors) for h in dir_info.safetensors_headers)
 
-        if all_tensors:
-            total_params = sum(t.param_count for t in all_tensors)
-            total_bytes = sum(t.size_bytes for t in all_tensors)
-            console.print(f"  Tensors: {len(all_tensors)}")
+        if total_tensors:
+            console.print(f"  Tensors: {total_tensors}")
             console.print(f"  Parameters: {format_params(total_params)}")
             console.print(f"  Tensor data: {format_size(total_bytes)}")
 
-            # Architecture detection from tensor names
-            arch = detect_architecture([t.name for t in all_tensors])
-            arch_parts = []
-            if arch.family != "Unknown":
-                arch_parts.append(arch.family)
-            if arch.adapter_type:
-                arch_parts.append(arch.adapter_type)
-            if arch_parts:
-                console.print(f"  Detected: {' / '.join(arch_parts)}")
+            names = [t.name for h in dir_info.safetensors_headers for t in h.tensors]
+            arch = detect_architecture(names)
+            arch_str = _format_arch(arch)
+            if arch_str:
+                console.print(f"  Detected: {arch_str}")
 
             if detail:
-                from hfutils.inspect.common import SafetensorsHeader
+                all_tensors = [t for h in dir_info.safetensors_headers for t in h.tensors]
                 combined = SafetensorsHeader(tensors=all_tensors)
-                _display_safetensors(combined, dir_info.path, detail=True)
+                _display_safetensors(combined, dir_info.path, detail=True, arch=arch)
 
-    # GGUF info
     if dir_info.gguf_info:
         _display_gguf(dir_info.gguf_info, dir_info.model_files[0])
 

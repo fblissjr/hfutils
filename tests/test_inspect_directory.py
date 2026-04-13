@@ -3,10 +3,10 @@
 import struct
 from pathlib import Path
 
-import numpy as np
 import orjson
 
 from hfutils.inspect.directory import inspect_directory, DirectoryInfo
+from tests.conftest import make_gguf_file
 
 
 def _make_safetensors(path: Path, tensors: dict | None = None) -> None:
@@ -17,20 +17,6 @@ def _make_safetensors(path: Path, tensors: dict | None = None) -> None:
     with open(path, "wb") as f:
         f.write(struct.pack("<Q", len(hb)))
         f.write(hb)
-
-
-def _make_gguf(path: Path, arch: str = "llama") -> None:
-    """Create a minimal GGUF file using the writer."""
-    from gguf import GGUFWriter
-    writer = GGUFWriter(path, arch)
-    writer.add_context_length(4096)
-    writer.add_embedding_length(2048)
-    t = np.zeros((2, 2), dtype=np.float32)
-    writer.add_tensor("test", t)
-    writer.write_header_to_file()
-    writer.write_kv_data_to_file()
-    writer.write_tensors_to_file()
-    writer.close()
 
 
 class TestInspectDirectory:
@@ -67,7 +53,7 @@ class TestInspectDirectory:
         assert info.shard_count == 2
 
     def test_gguf_directory(self, tmp_path):
-        _make_gguf(tmp_path / "model.gguf")
+        make_gguf_file(tmp_path / "model.gguf")
 
         info = inspect_directory(tmp_path)
         assert len(info.model_files) == 1

@@ -17,12 +17,8 @@ class ArchitectureInfo:
 
 
 # Each rule: (family_name, list_of_required_conditions)
-# A condition is either:
-#   - a string prefix (matched with startswith)
-#   - a compiled regex (matched with .match)
-#   - a tuple of ("any", [prefixes...]) meaning at least one must match
-#   - a tuple of ("exclude", prefix) meaning NO tensor may start with this
-
+# A condition is a string prefix (matched with startswith) or a compiled regex.
+# First match wins, so more specific patterns must come before general ones.
 _FAMILY_RULES: list[tuple[str, list]] = [
     # Hunyuan Video: double_blocks + single_blocks + token_refiner (distinguishes from Flux)
     ("Hunyuan Video", [

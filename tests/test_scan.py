@@ -6,6 +6,7 @@ from pathlib import Path
 import orjson
 
 from hfutils.commands.scan import scan_directory, ModelEntry
+from tests.conftest import make_gguf_file
 
 
 def _make_safetensors_file(path: Path, size: int = 100) -> None:
@@ -16,20 +17,6 @@ def _make_safetensors_file(path: Path, size: int = 100) -> None:
         f.write(struct.pack("<Q", len(hb)))
         f.write(hb)
         f.write(b"\x00" * max(2, size - 8 - len(hb)))
-
-
-def _make_gguf_file(path: Path) -> None:
-    """Create a minimal GGUF file."""
-    import numpy as np
-    from gguf import GGUFWriter
-    writer = GGUFWriter(path, "llama")
-    writer.add_context_length(4096)
-    t = np.zeros((2, 2), dtype=np.float32)
-    writer.add_tensor("test", t)
-    writer.write_header_to_file()
-    writer.write_kv_data_to_file()
-    writer.write_tensors_to_file()
-    writer.close()
 
 
 class TestScanDirectory:
@@ -65,7 +52,7 @@ class TestScanDirectory:
     def test_finds_gguf_model(self, tmp_path):
         model_dir = tmp_path / "gguf-model"
         model_dir.mkdir()
-        _make_gguf_file(model_dir / "model.gguf")
+        make_gguf_file(model_dir / "model.gguf")
 
         results = scan_directory(tmp_path)
         assert len(results) == 1

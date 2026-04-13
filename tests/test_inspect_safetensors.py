@@ -1,23 +1,18 @@
 """Tests for safetensors header-only inspection."""
 
 import struct
-import tempfile
 from pathlib import Path
 
 import orjson
 import pytest
 
 from hfutils.inspect.safetensors import read_header
-from hfutils.inspect.common import TensorInfo, SafetensorsHeader
+from hfutils.inspect.common import SafetensorsHeader
 
 
 def _make_safetensors(tmp: Path, header_dict: dict) -> Path:
-    """Create a minimal safetensors file with the given header JSON.
-
-    The actual tensor data is just zero bytes sized to match offsets.
-    """
+    """Create a minimal safetensors file with the given header JSON."""
     header_bytes = orjson.dumps(header_dict)
-    # Calculate total tensor data size from offsets
     max_offset = 0
     for key, val in header_dict.items():
         if key == "__metadata__":
@@ -88,7 +83,7 @@ class TestReadHeader:
         result = read_header(path)
 
         assert result.metadata == {"format": "pt", "source": "test"}
-        assert len(result.tensors) == 1  # __metadata__ not counted as tensor
+        assert len(result.tensors) == 1
 
     def test_dtype_breakdown(self, tmp_path):
         header_dict = {
@@ -101,12 +96,10 @@ class TestReadHeader:
 
         breakdown = result.dtype_breakdown()
         assert len(breakdown) == 2
-        # F16 should be first (more bytes)
         assert breakdown[0].dtype == "F16"
         assert breakdown[0].param_count == 150
         assert breakdown[0].tensor_count == 2
         assert breakdown[0].size_bytes == 300
-        # F32 second
         assert breakdown[1].dtype == "F32"
         assert breakdown[1].param_count == 10
 

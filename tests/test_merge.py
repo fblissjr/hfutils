@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import orjson
+import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
@@ -61,11 +62,8 @@ class TestMergeSafetensors:
         input_dir.mkdir()
         output_path = tmp_path / "merged.safetensors"
 
-        try:
+        with pytest.raises(FileNotFoundError):
             merge_safetensors(input_dir, output_path)
-            assert False, "Should have raised"
-        except FileNotFoundError:
-            pass
 
     def test_preserves_tensor_values_exactly(self, tmp_path):
         input_dir = tmp_path / "sharded"

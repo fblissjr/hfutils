@@ -1,6 +1,5 @@
 """Tests for GGUF header inspection."""
 
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -9,20 +8,17 @@ import pytest
 from hfutils.inspect.gguf import read_gguf_header, GGUFInfo
 
 
-def _make_gguf(tmp_path: Path, arch: str = "llama", quant: str = "Q4_K_M") -> Path:
-    """Create a minimal GGUF file using the gguf library's writer."""
+def _make_gguf_full(tmp_path: Path, arch: str = "llama") -> Path:
+    """Create a GGUF file with full metadata for testing GGUF-specific fields."""
     from gguf import GGUFWriter
 
     path = tmp_path / "model.gguf"
     writer = GGUFWriter(path, arch)
-
-    # Add key metadata fields
     writer.add_context_length(4096)
     writer.add_embedding_length(2048)
     writer.add_block_count(16)
     writer.add_vocab_size(32000)
 
-    # Add a small tensor
     tensor_data = np.zeros((4, 4), dtype=np.float32)
     writer.add_tensor("blk.0.attn_q.weight", tensor_data)
     writer.add_tensor("blk.0.attn_k.weight", tensor_data)
@@ -37,7 +33,7 @@ def _make_gguf(tmp_path: Path, arch: str = "llama", quant: str = "Q4_K_M") -> Pa
 
 class TestReadGGUFHeader:
     def test_basic_metadata(self, tmp_path):
-        path = _make_gguf(tmp_path)
+        path = _make_gguf_full(tmp_path)
         info = read_gguf_header(path)
 
         assert isinstance(info, GGUFInfo)
@@ -48,7 +44,7 @@ class TestReadGGUFHeader:
         assert info.vocab_size == 32000
 
     def test_tensor_count(self, tmp_path):
-        path = _make_gguf(tmp_path)
+        path = _make_gguf_full(tmp_path)
         info = read_gguf_header(path)
         assert info.tensor_count == 2
 
@@ -57,7 +53,7 @@ class TestReadGGUFHeader:
             read_gguf_header(Path("/nonexistent/model.gguf"))
 
     def test_different_architecture(self, tmp_path):
-        path = _make_gguf(tmp_path, arch="gemma")
+        path = _make_gguf_full(tmp_path, arch="gemma")
         info = read_gguf_header(path)
         assert info.architecture == "gemma"
 
