@@ -22,6 +22,13 @@ import orjson
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import COPY_CHUNK
 
+# NOTE: os.copy_file_range was benchmarked against the Python buffered copy
+# loop on a 23 GB sharded merge (see internal/log/log_2026-04-19.md). Result:
+# 5.83s vs 5.67s -- the kernel path was 2.8% *slower*, because we're bound by
+# destination SSD write throughput, not user-space memory bandwidth. Did not
+# ship. If a user case surfaces where kernel copy wins (CoW filesystems, NFS,
+# etc.), reintroduce behind an opt-in flag.
+
 
 def _merge_metadata(
     headers: list[RawHeader],
