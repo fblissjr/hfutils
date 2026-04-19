@@ -7,46 +7,54 @@ Local model file toolkit for safetensors and GGUF files, with CivitAI downloads 
 ## Install
 
 ```
-uv add hfutils
+uv add hfutils          # default: no torch dependency
+uv add 'hfutils[ml]'    # add torch for tensor-level Python usage
 ```
 
 ## Commands
 
 ```
-hfutils inspect model.safetensors            # header summary: tensors, params, VRAM, architecture
-hfutils inspect --detail model.safetensors   # full tensor list
-hfutils inspect model.gguf                   # GGUF metadata: arch, quant, context length
-hfutils inspect ./model-dir/                 # config.json + model file headers combined
-hfutils merge ./sharded-model/ out.safetensors  # merge sharded safetensors into one file
-hfutils scan /path/to/models/                # audit local model dirs: format, size, completeness
+hfutils inspect <path>                   # file, component dir, or diffusers pipeline
+hfutils inspect <path> --recursive       # walk a directory tree for model dirs
+hfutils inspect <path> --detail          # include full tensor list
 
-hfutils civitai search <query>               # search CivitAI models
-hfutils civitai info <id|url>                # model details and versions
-hfutils civitai dl <id|url>                  # download with resume
+hfutils convert single  <src> <out>      # merge shards (or copy a single file) into one .safetensors
+hfutils convert comfyui <src> <root>     # pack into ComfyUI folder layout (diffusion_models, vae, ...)
 
-hfutils comfyui pack <src> <comfyui_models>  # convert a local model into ComfyUI folders
+hfutils civitai search <query>           # search CivitAI
+hfutils civitai info   <id|url>          # model details
+hfutils civitai dl     <id|url>          # resumable download
 ```
 
-## `comfyui pack` examples
+## `convert` examples
 
 ```
-# Full diffusers pipeline -> ComfyUI layout (transformer, vae, text_encoder)
-hfutils comfyui pack <pipeline_dir> <comfyui_models>
+# Full diffusers pipeline -> ComfyUI folders (transformer + vae + text_encoder)
+hfutils convert comfyui <pipeline_dir> <comfyui_models>
 
-# Only a single component
-hfutils comfyui pack <pipeline_dir> <comfyui_models> --only transformer
+# Just one component
+hfutils convert comfyui <pipeline_dir> <comfyui_models> --only transformer
 
 # Single fused file -> diffusion_models/
-hfutils comfyui pack <model.safetensors> <comfyui_models> \
+hfutils convert comfyui <model.safetensors> <comfyui_models> \
     --as diffusion_model --name <base_name>
 
-# Preview the plan + per-component metadata (format, architecture, params, dtype, quant)
-hfutils comfyui pack <pipeline_dir> <comfyui_models> --dry-run
+# Preview plan + per-component metadata, write nothing
+hfutils convert comfyui <pipeline_dir> <comfyui_models> --dry-run
+
+# Merge a sharded transformer into one file
+hfutils convert single <sharded_dir> <output.safetensors>
 ```
 
-Source shapes handled:
-- **Diffusers pipeline** (has `model_index.json`): auto-discovers `transformer`, `vae`, `text_encoder[_N]` subfolders (the DiT lands in ComfyUI's `diffusion_models/`). Pick/skip with `--only`, `--skip`.
-- **Component directory** (sharded or single-file, no `model_index.json`): specify destination with `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`.
-- **Single `.safetensors` file**: specify destination with `--as`.
+## Source shapes
 
-`--dry-run` prints the full plan **and** the per-component metadata (architecture, tensor count, params, dominant dtype, quantization, size) so you can preview exactly what would happen without moving any bytes.
+`hfutils` auto-detects the source layout:
+
+- **Diffusers pipeline** — directory with `model_index.json`. Components (`transformer`, `vae`, `text_encoder[_N]`) are discovered from the subfolders and the relevant ones flow into their ComfyUI destinations.
+- **Component directory** — sharded (`*.safetensors.index.json` + multiple shards) or single-file (`diffusion_pytorch_model.safetensors` / `model.safetensors`). Requires `--as <target>` when used with `convert comfyui`.
+- **Single `.safetensors` file** — e.g. fused quantized checkpoints. Requires `--as <target>` with `convert comfyui`.
+- **GGUF file** — recognized for inspection.
+
+## Memory
+
+`convert single` (and merging inside `convert comfyui`) stream tensor bytes straight from each shard into the output. Peak memory is a few MiB regardless of model size — a 20+ GB sharded model merges with <500 MB RSS.

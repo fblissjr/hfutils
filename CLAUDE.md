@@ -1,44 +1,61 @@
+Last updated: 2026-04-19
+
 # hfutils
 
-Local model file toolkit for safetensors/GGUF files + CivitAI + ComfyUI layout conversion.
+Local model file toolkit: safetensors/GGUF inspection, layout conversion (ComfyUI + single-file), CivitAI downloads. Pure-Python streaming merge; no torch at runtime by default.
 
 ## Commands
 
 ```
-hfutils inspect <file|dir>         # safetensors/GGUF headers, architecture detection, config.json
-hfutils inspect --detail <path>    # full tensor list
-hfutils merge <input_dir> <output> # sharded safetensors -> single file (auto-detects diffusers/transformers index)
-hfutils scan <directory>           # audit local model storage
-hfutils civitai search <query>     # search CivitAI models
-hfutils civitai info <id|url>      # model details and versions
-hfutils civitai dl <id|url>        # download with resume
-hfutils comfyui pack <src> <root>  # convert local model into ComfyUI folders (diffusers pipeline, component dir, or single file)
+hfutils inspect <path>                       # file, component dir, pipeline
+hfutils inspect <path> --recursive           # walk a tree (replaces the old `scan`)
+hfutils inspect <path> --detail              # full tensor list
+
+hfutils convert single  <src> <out>          # sharded dir or single-file -> one safetensors
+hfutils convert comfyui <src> <comfyui_root> # -> diffusion_models/, vae/, text_encoders/, ...
+
+hfutils civitai search|info|dl
 ```
 
-`comfyui pack` flags: `--name`, `--only`, `--skip`, `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`.
+`convert comfyui` flags: `--name`, `--only`, `--skip`, `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`.
 
 ## Layout
 
 ```
 src/hfutils/
-  cli.py                -- typer app, registers commands + sub-apps
+  cli.py                  -- typer root only
   commands/
-    inspect_cmd.py      -- inspect command (safetensors, GGUF, directories)
-    merge.py            -- merge sharded safetensors + consolidate_component + copy_with_progress (public progress helpers)
-    scan.py             -- local directory audit
-    civitai.py          -- civitai sub-app (search, info, dl)
-    comfyui.py          -- comfyui sub-app (pack); plan_pack() + PackPlan/PackOp dataclasses
+    inspect.py            -- inspect (file/dir/pipeline/tree); dispatch via Source
+    convert.py            -- convert sub-app: single + comfyui sub-sub-commands
+    civitai.py            -- civitai sub-app (search, info, dl)
+  formats/
+    safetensors.py        -- stream_merge + total_data_bytes + raw header helpers (pure Python, no torch)
+  sources/
+    detect.py             -- Source + SourceKind + detect_source()
+  layouts/
+    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS + plan_pack()
   inspect/
-    common.py           -- shared types (TensorInfo, SafetensorsHeader) + formatters (format_size, format_params)
-    safetensors.py      -- binary header reader (struct.unpack, no safetensors lib)
-    gguf.py             -- binary header reader (struct.unpack, no gguf lib)
-    architecture.py     -- table-driven model family detection (_FAMILY_RULES)
-    directory.py        -- directory-level inspection (config.json + model files)
-    summary.py          -- ComponentSummary (format, params, dtype, quant, architecture) for conversion display
+    common.py             -- TensorInfo, SafetensorsHeader, DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params
+    safetensors.py        -- read_header + read_raw_header (exposes per-tensor data_offsets)
+    gguf.py               -- GGUF header reader
+    architecture.py       -- _FAMILY_RULES + architecture_name_from_config
+    directory.py          -- inspect_directory() (config.json + safetensors headers)
+    summary.py            -- ComponentSummary for pre-conversion display
+  io/
+    progress.py           -- make_progress + copy_with_progress (shared rich helpers)
   providers/
-    civitai.py          -- CivitaiClient API client + parse_model_ref + primary_file
-    download.py         -- shared download with rich progress + resume (urllib)
-tests/                  -- 84 tests, pytest
+    civitai.py            -- CivitaiClient API client
+    download.py           -- resumable download + rich progress
+tests/
+  test_formats_safetensors.py   -- stream_merge correctness + memory bound
+  test_sources_detect.py        -- source classification
+  test_layouts_comfyui.py       -- plan_pack
+  test_convert_comfyui.py       -- CLI smoke for `convert comfyui`
+  test_convert_single.py        -- CLI smoke for `convert single`
+  test_inspect_recursive.py     -- CLI smoke for `inspect --recursive`
+  test_architecture.py, test_civitai.py, test_download.py,
+  test_inspect_directory.py, test_inspect_gguf.py, test_inspect_safetensors.py,
+  test_summary.py               -- 95 tests total, pytest
 ```
 
 ## Dev
@@ -49,29 +66,31 @@ tests/                  -- 84 tests, pytest
 
 ## Dependencies
 
-Core: typer, orjson, rich, safetensors[torch]. Dev: pytest, gguf.
+- Runtime: `typer`, `orjson`, `rich`, `safetensors` (no torch).
+- Extras `[ml]`: `torch`, `safetensors[torch]` -- for users who want ad-hoc Python imports.
+- Dev: `pytest`, `gguf`, `torch`, `safetensors[torch]` (fixtures need torch).
 
 ## Conventions
 
 - All JSON via orjson, never stdlib json
 - Rich console for all user-facing output
-- Provider pattern: providers/<name>.py (client) + commands/<name>.py (typer sub-app), register in cli.py via `app.add_typer()`
-- Provider clients own their auth (via `auth_headers` property); commands pass it through, never reconstruct it
-- Architecture detection is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries
-- Shared formatters in inspect/common.py (format_size, format_params); don't duplicate
-- ComfyUI layout tables in commands/comfyui.py: `DIFFUSERS_COMPONENTS` (diffusers component -> folder+suffix) and `TARGET_FOLDERS` (--as target -> folder)
-- Conversion commands should print a metadata summary (via `inspect.summary.summarize_component`) before each op and use progress bars (via `merge._progress` / `_copy_with_progress`)
+- **Source abstraction is the spine.** Every command calls `detect_source(path)` first. Never re-invent format sniffing.
+- **Plan/Execute split.** Layout planners (`layouts/comfyui.plan_pack`) return a list of ops with zero filesystem writes. CLI execution is a thin runner.
+- **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path.
+- **Progress helpers live in `io/progress.py`.** Do not fork twin copies.
+- **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
+- **Architecture detection** is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries.
+- **Shared formatters** in `inspect/common.py` (`format_size`, `format_params`, `QUANT_DTYPE_LABELS`, `DTYPE_SIZES`); don't duplicate.
 
 ## Gotchas
 
-- Do NOT add HF download/search/info commands -- `hf` CLI handles those
-- Use `typer` (full package), NOT `typer-slim` -- typer-slim doesn't provide the `typer` import
-- GGUF parser is hand-rolled (struct.unpack) -- the gguf library memmaps entire files including tensor data
-- Safetensors header: first 8 bytes = LE uint64 header length, then JSON, then tensor data. Only read the header.
-- `_FAMILY_RULES` order matters: more specific patterns first (Hunyuan Video before Flux)
-- CivitAI needs a realistic User-Agent (DEFAULT_HEADERS in providers/download.py)
-- CivitAI API key via `CIVITAI_API_KEY` env var only (no config file)
-- Test GGUF fixtures use gguf library's GGUFWriter (dev dep only); runtime has no gguf dependency
-- Diffusers uses `diffusion_pytorch_model.safetensors.index.json`; transformers uses `model.safetensors.index.json`. `merge._find_index_file` globs `*.safetensors.index.json` to accept both (errors if multiple found)
-- `consolidate_component(input_dir, output)` handles both sharded dirs (merge) and single-file dirs (copy with progress). Errors on empty or multiple-unindexed cases
-- `plan_pack()` is pure -- no filesystem writes. Separates planning from execution so `--dry-run` and tests can assert on the plan
+- Do NOT add HF download/search/info commands -- `hf` CLI handles those.
+- Use `typer` (full package), NOT `typer-slim` -- typer-slim doesn't provide the `typer` import.
+- GGUF parser is hand-rolled (struct.unpack) -- the gguf library memmaps entire files including tensor data.
+- Safetensors header: first 8 bytes = LE uint64 header length, then JSON, then tensor data. `data_offsets` in the header are relative to the start of the tensor data region (not the file).
+- `_FAMILY_RULES` order matters: more specific patterns first (Hunyuan Video before Flux).
+- CivitAI needs a realistic User-Agent (DEFAULT_HEADERS in providers/download.py).
+- CivitAI API key via `CIVITAI_API_KEY` env var only (no config file).
+- Test fixtures use `safetensors.torch.save_file` (dev dep only); runtime merges never touch torch.
+- Diffusers uses `diffusion_pytorch_model.safetensors.index.json`; transformers uses `model.safetensors.index.json`. `*.safetensors.index.json` globbing accepts both.
+- `stream_merge` rejects duplicate tensor names across shards with a clear error.

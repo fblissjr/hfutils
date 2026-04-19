@@ -200,33 +200,46 @@ wheels = [
 
 [[package]]
 name = "hfutils"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "orjson" },
     { name = "rich" },
-    { name = "safetensors", extra = ["torch"] },
+    { name = "safetensors" },
     { name = "typer" },
+]
+
+[package.optional-dependencies]
+ml = [
+    { name = "safetensors", extra = ["torch"] },
+    { name = "torch" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "gguf" },
     { name = "pytest" },
+    { name = "safetensors", extra = ["torch"] },
+    { name = "torch" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "orjson", specifier = ">=3.10" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "safetensors", extras = ["torch"] },
+    { name = "safetensors" },
+    { name = "safetensors", extras = ["torch"], marker = "extra == 'ml'" },
+    { name = "torch", marker = "extra == 'ml'" },
     { name = "typer", specifier = ">=0.21" },
 ]
+provides-extras = ["ml"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "gguf", specifier = ">=0.18.0" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "safetensors", extras = ["torch"] },
+    { name = "torch" },
 ]
 
 [[package]]

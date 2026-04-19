@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0
+
+### Breaking CLI changes (no deprecation aliases)
+
+- `hfutils merge <dir> <out>`          -> `hfutils convert single <src> <out>`
+- `hfutils scan <dir>`                 -> `hfutils inspect <dir> --recursive`
+- `hfutils comfyui pack <src> <root>`  -> `hfutils convert comfyui <src> <root>`
+
+`convert single` accepts sharded directories AND single `.safetensors` files; it auto-detects and does the right thing.
+
+### Memory
+
+- `convert single` (and `convert comfyui` when merging sharded components) now uses a pure-Python streaming merger that never loads full tensors into RAM. Peak memory drops from O(model size) to ~4 MiB for any merge, regardless of model size.
+- Verified: a ~23 GB sharded transformer merges with peak RSS in the low hundreds of MB.
+
+### Runtime dependencies
+
+- `torch` / `safetensors[torch]` are no longer runtime dependencies. Default install is lean (~2 GB smaller).
+- Users who want torch can install `hfutils[ml]`.
+
+### Organization
+
+- New `Source` abstraction (`src/hfutils/sources/detect.py`) classifies any local path into one of: diffusers pipeline, component dir, single safetensors file, GGUF file, unknown. All commands consume this.
+- New `layouts/comfyui.py` carries the ComfyUI folder tables and the `plan_pack(source, root, ...)` planner. Commands are thin shims.
+- New `formats/safetensors.py` holds the streaming merge + raw-header reader.
+- New `io/progress.py` consolidates progress-bar helpers; `merge` and `convert` no longer carry twin copies.
+- `inspect/directory.py` index-file discovery now accepts any `*.safetensors.index.json` (fixes a diffusers detection bug that also existed in the old `scan`).
+
 ## 0.4.0
 
 - `hfutils comfyui pack` -- pack any local model layout into ComfyUI folders

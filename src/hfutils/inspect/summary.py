@@ -52,15 +52,15 @@ def _merge_breakdowns(headers: list[SafetensorsHeader]) -> list[DtypeBreakdown]:
 
 
 def _detect_architecture_name(source: Path, headers: list[SafetensorsHeader]) -> str | None:
-    if source.is_dir():
-        config_path = source / "config.json"
-        if config_path.exists():
-            try:
-                config = orjson.loads(config_path.read_bytes())
-            except orjson.JSONDecodeError:
-                config = None
-            if (name := architecture_name_from_config(config)):
-                return name
+    config_dir = source if source.is_dir() else source.parent
+    config_path = config_dir / "config.json"
+    if config_path.exists():
+        try:
+            config = orjson.loads(config_path.read_bytes())
+        except orjson.JSONDecodeError:
+            config = None
+        if (name := architecture_name_from_config(config)):
+            return name
 
     names = [t.name for h in headers for t in h.tensors]
     info = detect_architecture(names)
