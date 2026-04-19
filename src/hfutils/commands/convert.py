@@ -21,7 +21,8 @@ from hfutils.formats.safetensors import (
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import check_free_space
 from hfutils.io.progress import COPY_CHUNK, make_progress
-from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single  # PackOp for typing
+from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_comfyui, plan_single  # PackOp for typing
+from hfutils.layouts.plan import PackPlan
 from hfutils.sources.detect import detect_source
 from hfutils.sources.types import (
     ComponentSource,
@@ -186,7 +187,7 @@ def comfyui_cmd(
     target_value = target.value if target is not None else None
 
     try:
-        ops = plan_pack(
+        plan = plan_comfyui(
             src, comfyui_root, resolved_name,
             only=only or None, skip=skip or None, target=target_value,
         )
@@ -194,26 +195,29 @@ def comfyui_cmd(
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
-    if not ops:
+    if not plan:
         console.print("[yellow]Nothing to pack[/yellow] (no matching components found)")
         raise typer.Exit(1)
 
-    _print_plan(ops, dry_run)
-    for op in ops:
+    for problem in plan.validate():
+        _warn(problem)
+
+    _print_plan(plan.ops, dry_run)
+    for op in plan.ops:
         _print_op_preview(op)
 
     if dry_run:
         console.print("\n[yellow]Dry run complete[/yellow] -- no files written.")
         return
 
-    _preflight_space(ops)
-    manifests = _run_ops(ops)
+    _preflight_space(plan.ops)
+    manifests = _run_ops(plan.ops)
 
     if verify:
-        if not all(_verify_written(op.dest, manifests[op.dest]) for op in ops):
+        if not all(_verify_written(op.dest, manifests[op.dest]) for op in plan.ops):
             raise typer.Exit(2)
 
-    console.print(f"\n[green]Done.[/green] Wrote {len(ops)} file(s) under {comfyui_root}")
+    console.print(f"\n[green]Done.[/green] Wrote {len(plan)} file(s) under {comfyui_root}")
 
 
 @convert_app.command("single")
@@ -263,7 +267,8 @@ def single_cmd(
         console.print("[red]Error:[/red] --component only applies when source is a diffusers pipeline.")
         raise typer.Exit(1)
 
-    op = plan_single(src, output)
+    plan = plan_single(src, output)
+    op = plan.ops[0]
     _print_plan([op], dry_run)
     _print_op_preview(op)
 

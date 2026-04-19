@@ -27,7 +27,14 @@ from hfutils.formats.safetensors import (
     stream_merge,
     verify_output,
 )
-from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single
+from hfutils.layouts.comfyui import (
+    ConvertTarget,
+    PackOp,
+    plan_comfyui,
+    plan_pack,  # deprecated alias; dropped in 0.8
+    plan_single,
+)
+from hfutils.layouts.plan import PackPlan
 from hfutils.sources.detect import detect_source, enrich
 from hfutils.sources.types import (
     ComponentSource,
@@ -59,6 +66,7 @@ __all__ = [
     "NullObserver",
     "Observer",
     "PackOp",
+    "PackPlan",
     "PipelineSource",
     "PlanError",
     "PytorchDirSource",
@@ -73,6 +81,7 @@ __all__ = [
     "enrich",
     "manifest_from_shards",
     "per_op_merge_observer",
+    "plan_comfyui",
     "plan_pack",
     "plan_single",
     "read_raw_header",

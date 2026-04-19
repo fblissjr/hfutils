@@ -98,7 +98,7 @@ def _plan_component(
     )
 
 
-def plan_pack(
+def plan_comfyui(
     source: Source,
     comfyui_root: Path,
     name: str,
@@ -106,14 +106,16 @@ def plan_pack(
     only: list[str] | None = None,
     skip: list[str] | None = None,
     target: str | None = None,
-) -> list[PackOp]:
-    """Build a list of operations to pack `source` into `comfyui_root`.
+) -> "PackPlan":
+    """Build a PackPlan to pack `source` into `comfyui_root`.
 
     - PipelineSource: auto-discovers components; `target` is ignored.
       Components known to `DIFFUSERS_COMPONENTS` are packed; unknown components
       (scheduler/tokenizer) are skipped silently.
     - ComponentSource or SafetensorsFileSource: requires `target`.
     """
+    from hfutils.layouts.plan import PackPlan
+
     match source:
         case PipelineSource(components=components):
             ops: list[PackOp] = []
@@ -127,7 +129,7 @@ def plan_pack(
                 op = _plan_component(source, component, comfyui_root, name)
                 if op is not None:
                     ops.append(op)
-            return ops
+            return PackPlan(ops=ops, source=source, meta={"target": "comfyui"})
 
         case ComponentSource(path=p, shards=shards):
             if target is None:
@@ -135,10 +137,14 @@ def plan_pack(
                 raise PlanError(
                     f"Source is a component directory; specify destination with --as ({valid})"
                 )
-            return [PackOp(
-                label="single", source=p, shards=list(shards),
-                dest=_target_dest(target, comfyui_root, name),
-            )]
+            return PackPlan(
+                ops=[PackOp(
+                    label="single", source=p, shards=list(shards),
+                    dest=_target_dest(target, comfyui_root, name),
+                )],
+                source=source,
+                meta={"target": "comfyui"},
+            )
 
         case SafetensorsFileSource(path=p):
             if target is None:
@@ -146,10 +152,14 @@ def plan_pack(
                 raise PlanError(
                     f"Source is a single file; specify destination with --as ({valid})"
                 )
-            return [PackOp(
-                label="single", source=p, shards=[p],
-                dest=_target_dest(target, comfyui_root, name),
-            )]
+            return PackPlan(
+                ops=[PackOp(
+                    label="single", source=p, shards=[p],
+                    dest=_target_dest(target, comfyui_root, name),
+                )],
+                source=source,
+                meta={"target": "comfyui"},
+            )
 
         case _:
             raise PlanError(
@@ -157,17 +167,24 @@ def plan_pack(
             )
 
 
-def plan_single(source: Source, output: Path) -> PackOp:
-    """Build a one-op plan for `convert single`: dump the source's safetensors
-    into `output`. Callers ensure `source` is a ComponentSource or
-    SafetensorsFileSource."""
+# Backward-compat alias for one release. Dropped in 0.8.
+plan_pack = plan_comfyui
+
+
+def plan_single(source: Source, output: Path) -> "PackPlan":
+    """Build a PackPlan with one op: dump the source's safetensors into `output`.
+
+    Callers ensure `source` is a ComponentSource or SafetensorsFileSource."""
+    from hfutils.layouts.plan import PackPlan
+
     match source:
         case ComponentSource(path=p, shards=shards):
-            return PackOp(label="single", source=p, shards=list(shards), dest=output)
+            op = PackOp(label="single", source=p, shards=list(shards), dest=output)
         case SafetensorsFileSource(path=p):
-            return PackOp(label="single", source=p, shards=[p], dest=output)
+            op = PackOp(label="single", source=p, shards=[p], dest=output)
         case _:
             raise PlanError(
                 f"plan_single expects a ComponentSource or SafetensorsFileSource; "
                 f"got {type(source).__name__}"
             )
+    return PackPlan(ops=[op], source=source, meta={"target": "single"})

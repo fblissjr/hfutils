@@ -34,9 +34,9 @@ class TestPlanPack:
         src = detect_source(tmp_path)
         comfy = tmp_path / "comfy"
 
-        ops = plan_pack(src, comfy, name="X")
+        plan = plan_pack(src, comfy, name="X")
 
-        by_label = {op.label: op for op in ops}
+        by_label = {op.label: op for op in plan.ops}
         assert by_label["transformer"].dest == comfy / "diffusion_models/X.safetensors"
         assert by_label["vae"].dest == comfy / "vae/X_vae.safetensors"
         assert by_label["text_encoder"].dest == comfy / "text_encoders/X_te.safetensors"
@@ -44,14 +44,14 @@ class TestPlanPack:
     def test_only_filter(self, tmp_path):
         _make_pipeline(tmp_path)
         src = detect_source(tmp_path)
-        ops = plan_pack(src, tmp_path / "c", name="X", only=["transformer"])
-        assert [op.label for op in ops] == ["transformer"]
+        plan = plan_pack(src, tmp_path / "c", name="X", only=["transformer"])
+        assert [op.label for op in plan.ops] == ["transformer"]
 
     def test_skip_filter(self, tmp_path):
         _make_pipeline(tmp_path)
         src = detect_source(tmp_path)
-        ops = plan_pack(src, tmp_path / "c", name="X", skip=["text_encoder"])
-        assert sorted(op.label for op in ops) == ["transformer", "vae"]
+        plan = plan_pack(src, tmp_path / "c", name="X", skip=["text_encoder"])
+        assert sorted(op.label for op in plan.ops) == ["transformer", "vae"]
 
     def test_single_file_requires_target(self, tmp_path):
         f = tmp_path / "m.safetensors"
@@ -66,10 +66,10 @@ class TestPlanPack:
         save_file({"w": torch.randn(2, 2)}, f)
         src = detect_source(f)
 
-        ops = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
-        assert len(ops) == 1
-        assert ops[0].dest == tmp_path / "c" / "diffusion_models/X.safetensors"
-        assert ops[0].kind == "copy"
+        plan = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
+        assert len(plan) == 1
+        assert plan.ops[0].dest == tmp_path / "c" / "diffusion_models/X.safetensors"
+        assert plan.ops[0].kind == "copy"
 
     def test_component_dir_with_target(self, tmp_path):
         # Sharded component dir
@@ -84,9 +84,9 @@ class TestPlanPack:
         }))
         src = detect_source(tmp_path)
 
-        ops = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
-        assert len(ops) == 1
-        assert ops[0].kind == "merge"
+        plan = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
+        assert len(plan) == 1
+        assert plan.ops[0].kind == "merge"
 
     def test_unknown_target_rejected(self, tmp_path):
         f = tmp_path / "m.safetensors"
