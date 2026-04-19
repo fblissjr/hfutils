@@ -13,7 +13,7 @@ from rich.console import Console
 from hfutils.formats.safetensors import read_raw_header, stream_merge
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import InsufficientSpaceError, check_free_space
-from hfutils.io.progress import copy_with_progress, make_progress
+from hfutils.io.progress import COPY_CHUNK, make_progress
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack
 from hfutils.sources.detect import Source, SourceKind, detect_source
 
@@ -30,17 +30,6 @@ def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
 
 
-def _stream_merge_with_progress(shards: list[Path], dst: Path) -> None:
-    with make_progress(console) as progress:
-        task = progress.add_task(f"merge -> {dst.name}", total=None)
-        stream_merge(
-            shards, dst,
-            on_total=lambda total: progress.update(task, total=total),
-            on_progress=lambda n: progress.update(task, advance=n),
-            on_warning=_warn,
-        )
-
-
 def _op_output_bytes(op: PackOp) -> int:
     """Sum of tensor-data bytes the op will write. Header reads only."""
     if op.kind == "copy":
@@ -51,6 +40,13 @@ def _op_output_bytes(op: PackOp) -> int:
         for t in h.tensors:
             total += t.data_offset_end - t.data_offset_start
     return total
+
+
+def _rough_op_total(op: PackOp) -> int:
+    """Fast stat-based byte estimate for progress bars. Slightly overcounts
+    merge ops by each shard's header overhead (tens of KB), which is
+    invisible against multi-GB totals."""
+    return sum(s.stat().st_size for s in op.shards)
 
 
 def _preflight_space(ops: list[PackOp]) -> None:
@@ -67,12 +63,48 @@ def _preflight_space(ops: list[PackOp]) -> None:
             raise typer.Exit(1)
 
 
-def _execute_op(op: PackOp) -> None:
-    op.dest.parent.mkdir(parents=True, exist_ok=True)
-    if op.kind == "copy":
-        copy_with_progress(op.shards[0], op.dest, console)
-    else:
-        _stream_merge_with_progress(op.shards, op.dest)
+def _run_ops(ops: list[PackOp]) -> None:
+    """Execute all ops under a single Progress with an overall + per-op bar."""
+    per_op_totals = [_rough_op_total(op) for op in ops]
+    grand_total = sum(per_op_totals)
+
+    with make_progress(console) as progress:
+        overall = progress.add_task("overall", total=grand_total)
+
+        for op, op_total in zip(ops, per_op_totals):
+            op.dest.parent.mkdir(parents=True, exist_ok=True)
+            op_task = progress.add_task(
+                f"{op.kind:>5s} -> {op.dest.name}", total=op_total,
+            )
+
+            if op.kind == "copy":
+                src = op.shards[0]
+                with open(src, "rb") as fi, open(op.dest, "wb") as fo:
+                    while True:
+                        chunk = fi.read(COPY_CHUNK)
+                        if not chunk:
+                            break
+                        fo.write(chunk)
+                        progress.update(op_task, advance=len(chunk))
+                        progress.update(overall, advance=len(chunk))
+            else:
+                # For merge, stream_merge will tell us the exact total once it
+                # parses headers; reshape the op task to match.
+                def _on_total(total: int, tid: int = op_task) -> None:
+                    progress.update(tid, total=total)
+
+                def _on_progress(n: int, tid: int = op_task) -> None:
+                    progress.update(tid, advance=n)
+                    progress.update(overall, advance=n)
+
+                stream_merge(
+                    op.shards, op.dest,
+                    on_total=_on_total,
+                    on_progress=_on_progress,
+                    on_warning=_warn,
+                )
+
+            progress.update(op_task, visible=False)
 
 
 def _verify_output(op: PackOp) -> bool:
@@ -174,16 +206,15 @@ def comfyui_cmd(
         raise typer.Exit(1)
 
     _print_plan(ops, dry_run)
-    if not dry_run:
-        _preflight_space(ops)
     for op in ops:
         _print_op_preview(op)
-        if not dry_run:
-            _execute_op(op)
 
     if dry_run:
         console.print("\n[yellow]Dry run complete[/yellow] -- no files written.")
         return
+
+    _preflight_space(ops)
+    _run_ops(ops)
 
     if verify:
         if not all(_verify_output(op) for op in ops):
@@ -258,7 +289,7 @@ def single_cmd(
         return
 
     _preflight_space([op])
-    _execute_op(op)
+    _run_ops([op])
 
     if verify and not _verify_output(op):
         raise typer.Exit(2)
