@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.0
+
+### CLI
+
+- `--only`/`--skip` on `convert comfyui` are now repeatable flags (`--only transformer --only vae`), not comma-split strings.
+- `--as` is a typer `Enum`; valid values appear in `--help` and invalid values are rejected at the CLI layer.
+- New `hfutils --version`.
+- `convert single <pipeline_dir> <out.safetensors> --component <name>` lets you merge one component of a diffusers pipeline without drilling into the subdir. Errors list available components when `--component` is missing or wrong.
+- `convert --verify` re-reads the output header after a merge and confirms tensor names, dtypes, and shapes match the plan. Exit code 2 on mismatch.
+- Unified `DRY RUN Plan` header across `convert comfyui` and `convert single`.
+- `convert comfyui` renders a single overall progress bar across all ops (no more bar tear-down between components).
+
+### Backend
+
+- `Source` absorbed `inspect_directory`/`DirectoryInfo`. New `Source.enrich()` lazily populates `config`, `total_file_size`, `safetensors_headers`, and `gguf_info`. `inspect/directory.py` deleted.
+- `commands/inspect.py` split: display helpers live in `inspect/views.py`, walking + HF cache detection lives in `inspect/walker.py`. Command file is ~40 lines.
+- New public API at the top-level `hfutils` package: `from hfutils import detect_source, stream_merge, plan_pack, Source, SourceKind, PackOp, ConvertTarget, read_raw_header, __version__`.
+- New `io/fs.py::check_free_space` preflights disk space in `convert` sub-sub-commands; refuses to start on insufficient space.
+
+### Performance
+
+- `inspect --recursive` walks parallelized via `ThreadPoolExecutor(max_workers=8)`. Output order stable via post-fan-in name sort.
+- Benchmarked `os.copy_file_range` against Python buffered copy on a real 23 GB merge: 5.83s vs 5.67s (kernel path is 2.8% *slower* — we're disk-write-bound). Did not ship; kept the Python path.
+
+### Accuracy
+
+- `sources/detect._check_shard_integrity` reads each shard's header and confirms declared tensor-data size matches the physical file size. Truncated / corrupt shards now flag `Source.integrity_error` and show `CORRUPT` in `inspect --recursive`.
+- `stream_merge` emits a warning for every metadata key whose value differs between shards (previously silent last-write-wins).
+- New `_FAMILY_RULES` entries: Z-Image (`all_final_layer.` + `adaLN_modulation`) and `AutoencoderKL` (encoder.down_blocks + decoder.up_blocks). Deliberately did NOT add Qwen3 — its layout is indistinguishable from generic Llama-style LLMs without `config.json`, which `architecture_name_from_config` already handles.
+- `GGUFInfo` gains `rope_freq_base`, `rope_freq_scale`, `rope_scaling_type`, `bos_token_id`, `eos_token_id`, `chat_template`. `inspect` surfaces them when present.
+
+### Testing
+
+- Memory test threshold tightened 16 MiB → 10 MiB (observed peak is 8 MiB).
+- New integration test: diffusers pipelines with mixed `.safetensors` + `.bin` components. Surfaced a planner bug where zero-safetensors components emitted empty PackOps; fixed in layouts/comfyui.
+- 141 tests total (was 101 at 0.5.0; +40).
+
+### Internal
+
+- 12 logical commits (visible via `git log --oneline`). `main` stayed green between each.
+
 ## 0.5.0
 
 ### Breaking CLI changes (no deprecation aliases)
