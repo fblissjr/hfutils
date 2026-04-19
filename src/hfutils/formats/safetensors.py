@@ -14,12 +14,12 @@ where offsets are relative to the start of the tensor_data region.
 """
 
 import struct
-from collections.abc import Callable
 from pathlib import Path
 
 import orjson
 
 from hfutils.errors import StreamMergeError
+from hfutils.events import MergeObserver, NullMergeObserver
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import COPY_CHUNK
 
@@ -104,42 +104,36 @@ def stream_merge(
     shard_paths: list[Path],
     output_path: Path,
     *,
-    on_total: Callable[[int], None] | None = None,
-    on_progress: Callable[[int], None] | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    observer: MergeObserver | None = None,
 ) -> Manifest:
     """Merge sharded safetensors files into one output, without loading tensors.
 
     Preserves each shard's tensor insertion order; shards are processed in the
-    order given. Raises ValueError on duplicate tensor names across shards.
+    order given. Raises `StreamMergeError` on duplicate tensor names or
+    unexpected EOF.
 
     Returns a `Manifest` describing the tensors written (name -> (dtype,
     shape)). `verify_output` consumes this so the caller doesn't need to
-    re-parse shard headers a second time.
+    re-parse shard headers.
 
-    `on_total`, if provided, is called once with the total tensor-data byte
-    count before any copying starts, so a caller can size a progress bar
-    without paying for a separate header-read pass.
-
-    `on_progress` is called after each chunk write with the number of bytes
-    just written.
-
-    `on_warning` is called for each metadata-key conflict across shards. The
-    merged file inherits the last shard's value; callers usually want to
-    surface these to the user.
+    The optional `observer` receives three callbacks:
+      - `on_total(bytes)` once, before copying starts;
+      - `on_progress(bytes)` after each chunk write;
+      - `on_warning(message)` for each metadata-key conflict across shards
+        (the merged file inherits the last shard's value).
     """
+    obs: MergeObserver = observer if observer is not None else NullMergeObserver()
+
     if not shard_paths:
         raise StreamMergeError("stream_merge requires at least one shard")
 
     headers = [read_raw_header(p) for p in shard_paths]
     header_bytes, plan, warnings = _build_merged_header_json(headers, shard_paths)
 
-    if on_warning is not None:
-        for msg in warnings:
-            on_warning(msg)
+    for msg in warnings:
+        obs.on_warning(msg)
 
-    if on_total is not None:
-        on_total(sum(size for _, _, size, _ in plan))
+    obs.on_total(sum(size for _, _, size, _ in plan))
 
     manifest: Manifest = {
         entry.name: (entry.dtype, tuple(entry.shape))
@@ -166,8 +160,7 @@ def stream_merge(
                         )
                     out.write(chunk)
                     remaining -= len(chunk)
-                    if on_progress is not None:
-                        on_progress(len(chunk))
+                    obs.on_progress(len(chunk))
 
     return manifest
 

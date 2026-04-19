@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 
 from hfutils.errors import InsufficientSpaceError, PlanError
+from hfutils.events import MergeObserver
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -34,6 +35,29 @@ console = Console()
 
 def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
+
+
+class _RichMergeObserver:
+    """MergeObserver that drives a rich Progress task and emits warnings via the console.
+
+    Wraps two tasks: the per-op task (resized when on_total arrives) and the
+    overall task that's advanced in lockstep. Until PlanRunner lands, this
+    lives here; commit 5 will move it into events.py as a reusable observer."""
+
+    def __init__(self, progress, op_task, overall_task) -> None:
+        self._progress = progress
+        self._op_task = op_task
+        self._overall = overall_task
+
+    def on_total(self, total_bytes: int) -> None:
+        self._progress.update(self._op_task, total=total_bytes)
+
+    def on_progress(self, bytes_copied: int) -> None:
+        self._progress.update(self._op_task, advance=bytes_copied)
+        self._progress.update(self._overall, advance=bytes_copied)
+
+    def on_warning(self, message: str) -> None:
+        _warn(message)
 
 
 def _op_total_bytes(op: PackOp) -> int:
@@ -92,18 +116,9 @@ def _run_ops(ops: list[PackOp]) -> dict[Path, Manifest]:
                         progress.update(overall, advance=len(chunk))
                 manifests[op.dest] = manifest_from_shards([src])
             else:
-                def _on_total(total: int, tid: int = op_task) -> None:
-                    progress.update(tid, total=total)
-
-                def _on_progress(n: int, tid: int = op_task) -> None:
-                    progress.update(tid, advance=n)
-                    progress.update(overall, advance=n)
-
                 manifests[op.dest] = stream_merge(
                     op.shards, op.dest,
-                    on_total=_on_total,
-                    on_progress=_on_progress,
-                    on_warning=_warn,
+                    observer=_RichMergeObserver(progress, op_task, overall),
                 )
 
             progress.update(op_task, visible=False)

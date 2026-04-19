@@ -11,6 +11,15 @@ from hfutils.errors import (
     StreamMergeError,
     VerificationError,
 )
+from hfutils.events import (
+    CollectingMergeObserver,
+    CollectingObserver,
+    MergeObserver,
+    NullMergeObserver,
+    NullObserver,
+    Observer,
+    per_op_merge_observer,
+)
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -24,11 +33,17 @@ from hfutils.sources.detect import IntegrityError, Source, SourceKind, detect_so
 __version__ = "0.6.0"
 
 __all__ = [
+    "CollectingMergeObserver",
+    "CollectingObserver",
     "ConvertTarget",
     "HfutilsError",
     "InsufficientSpaceError",
     "IntegrityError",
     "Manifest",
+    "MergeObserver",
+    "NullMergeObserver",
+    "NullObserver",
+    "Observer",
     "PackOp",
     "PlanError",
     "Source",
@@ -39,6 +54,7 @@ __all__ = [
     "__version__",
     "detect_source",
     "manifest_from_shards",
+    "per_op_merge_observer",
     "plan_pack",
     "plan_single",
     "read_raw_header",

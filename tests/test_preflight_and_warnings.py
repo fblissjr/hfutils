@@ -78,14 +78,16 @@ class TestMetadataWarnings:
         _, warnings = _merge_metadata(headers, shards)
         assert warnings == []
 
-    def test_stream_merge_surfaces_warning_via_callback(self, tmp_path):
+    def test_stream_merge_surfaces_warning_via_observer(self, tmp_path):
+        from hfutils.events import CollectingMergeObserver
+
         shards = _make_sharded(tmp_path, [
             {"key": "a"},
             {"key": "b"},
         ])
-        seen: list[str] = []
-        stream_merge(shards, tmp_path / "out.safetensors", on_warning=seen.append)
-        assert any("key" in w for w in seen)
+        obs = CollectingMergeObserver()
+        stream_merge(shards, tmp_path / "out.safetensors", observer=obs)
+        assert any("key" in w for w in obs.warnings)
 
     def test_cli_shows_metadata_conflict_warning(self, tmp_path):
         shards = _make_sharded(tmp_path, [
