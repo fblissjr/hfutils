@@ -23,33 +23,38 @@ hfutils civitai search|info|dl
 
 ```
 src/hfutils/
-  __init__.py             -- public API: detect_source, stream_merge, plan_pack, Source, PackOp, ConvertTarget, __version__
-  cli.py                  -- typer root + --version callback
+  __init__.py             -- public API (all stable symbols re-exported here)
+  cli.py                  -- typer root + --version; registers inspect, convert, civitai
+  errors.py               -- HfutilsError + subclasses (SourceError, PlanError, StreamMergeError, VerificationError, InsufficientSpaceError)
+  events.py               -- Observer + MergeObserver protocols + NullObserver / CollectingObserver / RichObserver
+  runner.py               -- PlanRunner (executes a PackPlan, dispatches events to an Observer)
   commands/
-    inspect.py            -- thin wrapper: argument parsing + dispatch to views/walker
-    convert.py            -- convert sub-app: single + comfyui sub-sub-commands
+    inspect.py            -- thin CLI wrapper; dispatches via DetectLevel.FULL
+    convert.py            -- unified `convert <src> --to <layout>` command
     civitai.py            -- civitai sub-app (search, info, dl)
   formats/
-    safetensors.py        -- stream_merge + raw header helpers (pure Python, no torch)
+    safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
   sources/
-    detect.py             -- Source (with .enrich()) + SourceKind + detect_source()
+    detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView
+    types.py              -- Source union + variants: PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource
   layouts/
-    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS + ConvertTarget + plan_pack()
+    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS + ConvertTarget + plan_comfyui + plan_single
+    plan.py               -- PackPlan dataclass
   inspect/
-    common.py             -- TensorInfo, SafetensorsHeader, DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params, read_json_if_exists
+    common.py             -- TensorInfo, SafetensorsHeader (with .combine()), DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params, read_json_if_exists
     safetensors.py        -- read_header + read_raw_header (per-tensor data_offsets)
-    gguf.py               -- GGUF header reader; extended with rope params, token ids, chat template
+    gguf.py               -- GGUF header reader; rope params, token ids, chat template
     architecture.py       -- _FAMILY_RULES + architecture_name_from_config
     summary.py            -- ComponentSummary for pre-conversion display
-    views.py              -- display_* helpers (take explicit Console param)
+    views.py              -- display_* helpers (pattern-match on Source variants; explicit Console param)
     walker.py             -- walk_for_models (ThreadPoolExecutor, 8 workers)
   io/
-    progress.py           -- make_progress + copy_with_progress + COPY_CHUNK (shared rich helpers)
+    progress.py           -- make_progress + copy_with_progress + COPY_CHUNK
     fs.py                 -- check_free_space preflight
   providers/
     civitai.py            -- CivitaiClient API client
     download.py           -- resumable download + rich progress (uses make_progress)
-tests/                    -- 141 tests, pytest
+tests/                    -- 171 tests, pytest (includes Hypothesis property tests for stream_merge)
 ```
 
 ## Dev
@@ -70,12 +75,16 @@ tests/                    -- 141 tests, pytest
 - All JSON via orjson, never stdlib json
 - Rich console for all user-facing output
 - Memory-bound tests use `tracemalloc` (Python-heap scoped), never `ru_maxrss` (process-wide, flaky).
-- **Source abstraction is the spine.** Every command calls `detect_source(path)` first. Never re-invent format sniffing. Call `.enrich()` when display needs headers/config/sizes; leave it lazy in batch walks.
-- **Plan/Execute split.** Layout planners (`layouts/comfyui.plan_pack`) return a list of ops with zero filesystem writes. CLI execution is a thin runner. Ops whose `shards` is empty are filtered at plan time.
+- **Source is a discriminated union.** `Source = PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource`. Dispatch via `match src:` or `isinstance`. Do not invent a kind enum. `detect_source(path, level: DetectLevel)` is the only classification point; `enrich(source)` returns a fresh `EnrichedView` (immutable pattern, safe to call from threads).
+- **DetectLevel.BASIC (default) skips integrity.** Only single-target inspect passes `DetectLevel.FULL`. Walker / convert / plan_* all use default. Adding always-on work per-dir to the walker is a regression.
+- **Plan/Execute/Observe split.**
+  - `plan_comfyui` / `plan_single` return `PackPlan`. No filesystem writes.
+  - `PlanRunner(observer).run(plan)` executes. Observer receives lifecycle events.
+  - CLI wraps with `RichObserver`. Library consumers attach `NullObserver`, `CollectingObserver`, or custom.
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
-- **Progress helpers live in `io/progress.py`.** All commands (`convert`, `inspect`, `civitai dl`) use `make_progress(console)`. Do not fork twin copies.
-- **One Progress context across multi-op runs.** `convert comfyui` uses `_run_ops` to render a single overall bar + ephemeral per-op bars. Do not open a new Progress per op.
-- **Public API** lives in `hfutils/__init__.py`. When adding a new primitive used externally (e.g. a new format helper, a new Source method), re-export it there.
+- **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
+- **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. Do not fork twin copies.
+- **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
 - **Architecture detection** is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries.
 - **Shared formatters** in `inspect/common.py` (`format_size`, `format_params`, `QUANT_DTYPE_LABELS`, `DTYPE_SIZES`); don't duplicate.

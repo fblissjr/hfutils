@@ -5,7 +5,7 @@ import hfutils
 
 def test_version_string():
     assert isinstance(hfutils.__version__, str)
-    assert hfutils.__version__ == "0.6.0"
+    assert hfutils.__version__ == "0.7.0"
 
 
 def test_detect_source_exported():

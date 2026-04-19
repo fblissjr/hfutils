@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0
+
+### Breaking
+
+- **CLI**: `hfutils convert comfyui <src> <root>` and `hfutils convert single <src> <out>` are gone. One top-level command with `--to`:
+  - `hfutils convert <pipeline_dir> --to comfyui --root <models>` (was `convert comfyui ...`)
+  - `hfutils convert <sharded_dir>  --to single  --out <out.safetensors>` (was `convert single ...`)
+- **Source** is now a discriminated union: `PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource`. `SourceKind` enum is gone; use `isinstance` / `match`. `Source.enrich()` method is replaced by free function `enrich(source) -> EnrichedView`.
+- **`stream_merge`**: the three callbacks (`on_total`, `on_progress`, `on_warning`) are replaced by a single `observer: MergeObserver` kwarg.
+- **`plan_pack` renamed `plan_comfyui`** and returns `PackPlan` (was `list[PackOp]`). Backward-compat alias `plan_pack` re-exported for one release; removed in 0.8.
+
+### Major
+
+- **Error hierarchy** (`hfutils.errors`): `HfutilsError` base plus `SourceError`, `PlanError`, `StreamMergeError`, `VerificationError`, `InsufficientSpaceError`. Library consumers can catch broadly or narrowly.
+- **Observer protocol** (`hfutils.events`): `Observer` (plan-scope, 6 events) + `MergeObserver` (merge-scope, 3 events). Built-in: `NullObserver`, `NullMergeObserver`, `CollectingObserver`, `CollectingMergeObserver`, `RichObserver` (the CLI's default).
+- **`PlanRunner`** (`hfutils.runner`): executes a `PackPlan`, dispatches events to the configured Observer. CLI wraps it with `RichObserver`; library consumers attach any Observer implementation.
+- **`PackPlan` object** (`hfutils.layouts.plan`): replaces the bare `list[PackOp]`. Exposes `.total_bytes`, `.validate()`, supports `len()`, iteration, truthiness.
+- **Unified `convert` CLI**: one command, `--to {comfyui,single}` dispatches. `--root` required for comfyui; `--out` required for single. `--component` on `--to single` picks a pipeline subfolder without drilling in.
+
+### Medium
+
+- **`DetectLevel` kwarg** on `detect_source`: `BASIC` (default, no per-shard header reads) vs `FULL` (+ integrity validation). Walker uses default; `inspect <path>` uses `FULL`.
+- **Hypothesis property tests** for `stream_merge`: random tensor dicts with mixed dtypes, random 1..5-shard splits, bytewise round-trip assertion. And a metadata-warning property: fires iff a key's value actually differs across shards.
+- **Public API** gains: `HfutilsError` hierarchy, `Observer` / `MergeObserver` + concrete implementations, `PlanRunner`, `PackPlan`, `DetectLevel`, `plan_comfyui`, and the Source variants.
+
 ## 0.6.0
 
 ### CLI
