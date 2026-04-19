@@ -7,7 +7,8 @@ import urllib.request
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import Progress, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+
+from hfutils.io.progress import make_progress
 
 console = Console()
 
@@ -70,14 +71,7 @@ def download_file(
     try:
         with urllib.request.urlopen(req) as resp, open(dest, mode) as f:
             if show_progress and total_size > 0:
-                with Progress(
-                    "[progress.description]{task.description}",
-                    BarColumn(),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                    console=console,
-                ) as progress:
+                with make_progress(console) as progress:
                     task = progress.add_task("Downloading", total=total_size, completed=start_byte)
                     while chunk := resp.read(256 * 1024):
                         f.write(chunk)
