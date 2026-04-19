@@ -2,8 +2,16 @@
 
 `detect_source(path)` returns one of six `Source` variants (see sources/types.py).
 `enrich(source)` optionally reads headers/config for a display-ready view.
+
+The `level` kwarg controls whether per-shard integrity validation runs:
+- `BASIC` (default): classify + pipeline_meta + components + has_config +
+  sharded + incomplete-shard check (one JSON read). No per-shard header reads.
+  Cheap; used by the recursive walker and plan builders.
+- `FULL`: + `_check_shard_integrity` which reads each shard's header.
+  Used by single-target inspect where the user wants corruption caught.
 """
 
+from enum import Enum
 from pathlib import Path
 
 import orjson
@@ -22,6 +30,16 @@ from hfutils.sources.types import (
     Source,
     UnknownSource,
 )
+
+
+class DetectLevel(str, Enum):
+    """Controls detect_source's integrity check.
+
+    - BASIC (default): everything except per-shard header reads.
+    - FULL: + shard integrity validation.
+    """
+    BASIC = "basic"
+    FULL = "full"
 
 # Diffusers subfolders we recognize. Weights-bearing ones (transformer, vae,
 # text_encoder[_N]) are the `convert comfyui` candidates; scheduler/tokenizer
@@ -80,7 +98,7 @@ def _check_shard_integrity(shards: list[Path]) -> IntegrityError | None:
     return None
 
 
-def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
+def _detect_component_or_pytorch_dir(path: Path, level: DetectLevel) -> Source | None:
     shards = sorted(path.glob("*.safetensors"))
     has_config = (path / "config.json").is_file()
 
@@ -91,7 +109,9 @@ def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
             _check_incomplete(index_candidates[0], {f.name for f in shards})
             if sharded else False
         )
-        integrity_error = _check_shard_integrity(shards)
+        integrity_error = (
+            _check_shard_integrity(shards) if level == DetectLevel.FULL else None
+        )
         return ComponentSource(
             path=path,
             shards=shards,
@@ -111,7 +131,7 @@ def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
     return None
 
 
-def detect_source(path: Path) -> Source:
+def detect_source(path: Path, level: DetectLevel = DetectLevel.BASIC) -> Source:
     if not path.exists():
         return UnknownSource(path=path)
 
@@ -130,7 +150,7 @@ def detect_source(path: Path) -> Source:
         ]
         return PipelineSource(path=path, components=components, pipeline_meta=meta)
 
-    component = _detect_component_or_pytorch_dir(path)
+    component = _detect_component_or_pytorch_dir(path, level)
     if component is not None:
         return component
 

@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from hfutils.cli import app
 from hfutils.inspect.architecture import detect_architecture
-from hfutils.sources.detect import detect_source
+from hfutils.sources.detect import DetectLevel, detect_source
 
 runner = CliRunner()
 
@@ -35,7 +35,7 @@ class TestShardIntegrity:
         with open(shard, "r+b") as f:
             f.truncate(size - 10)
 
-        src = detect_source(tmp_path)
+        src = detect_source(tmp_path, DetectLevel.FULL)
         assert src.incomplete
         assert src.integrity_error is not None
         assert src.integrity_error.kind == "truncated"
@@ -43,8 +43,20 @@ class TestShardIntegrity:
 
     def test_clean_shards_no_integrity_error(self, tmp_path):
         _make_sharded(tmp_path)
-        src = detect_source(tmp_path)
+        src = detect_source(tmp_path, DetectLevel.FULL)
         assert not src.incomplete
+        assert src.integrity_error is None
+
+    def test_basic_level_skips_integrity(self, tmp_path):
+        """DetectLevel.BASIC (default) doesn't catch truncation -- that's the point
+        (walker doesn't need this expense per dir)."""
+        _make_sharded(tmp_path)
+        shard = tmp_path / "shard-00001.safetensors"
+        size = shard.stat().st_size
+        with open(shard, "r+b") as f:
+            f.truncate(size - 10)
+
+        src = detect_source(tmp_path)  # default BASIC
         assert src.integrity_error is None
 
 

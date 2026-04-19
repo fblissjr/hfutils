@@ -8,7 +8,7 @@ from rich.console import Console
 from hfutils.cli import app
 from hfutils.inspect.views import display_source, display_tree
 from hfutils.inspect.walker import walk_for_models
-from hfutils.sources.detect import detect_source
+from hfutils.sources.detect import DetectLevel, detect_source
 
 console = Console()
 
@@ -35,4 +35,4 @@ def inspect(
         display_tree(path, entries, console)
         return
 
-    display_source(detect_source(path), detail, console)
+    display_source(detect_source(path, DetectLevel.FULL), detail, console)

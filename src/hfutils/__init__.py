@@ -37,7 +37,7 @@ from hfutils.layouts.comfyui import (
     plan_single,
 )
 from hfutils.layouts.plan import PackPlan
-from hfutils.sources.detect import detect_source, enrich
+from hfutils.sources.detect import DetectLevel, detect_source, enrich
 from hfutils.sources.types import (
     ComponentSource,
     EnrichedView,
@@ -57,6 +57,7 @@ __all__ = [
     "CollectingObserver",
     "ComponentSource",
     "ConvertTarget",
+    "DetectLevel",
     "EnrichedView",
     "GgufFileSource",
     "HfutilsError",
