@@ -70,18 +70,19 @@ hfutils convert <pipeline_dir> --to single --out <output.safetensors> --componen
 from pathlib import Path
 
 from hfutils import (
-    detect_source, DetectLevel,
+    ComponentSource, PipelineSource,
+    DetectLevel, detect_source,
+    NullObserver, PlanRunner, RichObserver,
     plan_comfyui, plan_single,
-    PlanRunner, RichObserver, NullObserver,
     stream_merge, verify_output,
 )
 
-# Classify
+# Classify + dispatch
 src = detect_source(Path("/path/to/pipeline"))
 match src:
-    case hfutils.PipelineSource(components=c):
+    case PipelineSource(components=c):
         ...
-    case hfutils.ComponentSource(shards=s):
+    case ComponentSource(shards=s):
         ...
 
 # Plan and run with the CLI's progress rendering

@@ -11,13 +11,12 @@ hfutils inspect <path>                       # file, component dir, pipeline
 hfutils inspect <path> --recursive           # walk a tree (replaces the old `scan`)
 hfutils inspect <path> --detail              # full tensor list
 
-hfutils convert single  <src> <out>          # sharded dir or single-file -> one safetensors
-hfutils convert comfyui <src> <comfyui_root> # -> diffusion_models/, vae/, text_encoders/, ...
-
+hfutils convert <src> --to <layout> [opts]   # unified convert; --to comfyui | single
 hfutils civitai search|info|dl
 ```
 
-`convert comfyui` flags: `--name`, `--only`, `--skip`, `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`.
+`convert --to comfyui` flags: `--root` (required), `--name`, `--only <c>` (repeat), `--skip <c>` (repeat), `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`, `--verify`.
+`convert --to single` flags: `--out` (required), `--component <c>` (for pipeline sources), `--dry-run`, `--verify`.
 
 ## Layout
 
@@ -36,10 +35,10 @@ src/hfutils/
     safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
   sources/
     detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView
-    types.py              -- Source union + variants: PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource
+    types.py              -- Source union + variants (PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource) + IntegrityError + display_kind()
   layouts/
-    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS + ConvertTarget + plan_comfyui + plan_single
-    plan.py               -- PackPlan dataclass
+    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS (keyed on ConvertTarget) + plan_comfyui + plan_single; PackOp has a cached total_bytes
+    plan.py               -- PackPlan (total_bytes is sum of op.total_bytes, lazily)
   inspect/
     common.py             -- TensorInfo, SafetensorsHeader (with .combine()), DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params, read_json_if_exists
     safetensors.py        -- read_header + read_raw_header (per-tensor data_offsets)
@@ -49,7 +48,7 @@ src/hfutils/
     views.py              -- display_* helpers (pattern-match on Source variants; explicit Console param)
     walker.py             -- walk_for_models (ThreadPoolExecutor, 8 workers)
   io/
-    progress.py           -- make_progress + copy_with_progress + COPY_CHUNK
+    progress.py           -- make_progress + copy_chunks (primitive) + copy_with_progress (rich wrapper) + COPY_CHUNK
     fs.py                 -- check_free_space preflight
   providers/
     civitai.py            -- CivitaiClient API client
@@ -62,7 +61,8 @@ tests/                    -- 171 tests, pytest (includes Hypothesis property tes
 - `uv sync && uv run pytest` -- install + test
 - `uv run hfutils --help` -- verify CLI
 - TDD: failing test first, then implement
-- CLI tests use `typer.testing.CliRunner`: `runner.invoke(app, ["convert", "single", str(src), str(out)])`. See `tests/test_convert_*.py`.
+- CLI tests use `typer.testing.CliRunner`: `runner.invoke(app, ["convert", str(src), "--to", "single", "--out", str(out)])`. See `tests/test_convert.py`.
+- Shared test fixtures: `make_sharded_component()` and `make_diffusers_pipeline()` live in `tests/conftest.py`. Don't re-roll local copies.
 
 ## Dependencies
 
@@ -83,7 +83,8 @@ tests/                    -- 171 tests, pytest (includes Hypothesis property tes
   - CLI wraps with `RichObserver`. Library consumers attach `NullObserver`, `CollectingObserver`, or custom.
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
 - **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
-- **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. Do not fork twin copies.
+- **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. Do not fork twin copies.
+- **`PackOp.total_bytes` is a `cached_property`.** Single source of truth for preflight + progress sizing. Don't stat shards elsewhere; read `op.total_bytes`.
 - **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
 - **Architecture detection** is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries.
