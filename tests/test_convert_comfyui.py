@@ -79,6 +79,7 @@ class TestConvertComfyui:
             "--name", "X",
         ])
         assert result.exit_code != 0
+        assert "--as" in result.output
 
     def test_single_file_with_as(self, tmp_path):
         f = tmp_path / "m.safetensors"

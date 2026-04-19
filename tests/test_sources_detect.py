@@ -84,3 +84,38 @@ class TestDetectSource:
     def test_empty_dir(self, tmp_path):
         src = detect_source(tmp_path)
         assert src.kind == SourceKind.UNKNOWN
+
+    def test_incomplete_sharded_dir_flagged(self, tmp_path):
+        # Index claims two shards, only one is present.
+        save_file({"a.weight": torch.randn(2, 2)}, tmp_path / "shard-00001-of-00002.safetensors")
+        (tmp_path / "model.safetensors.index.json").write_bytes(orjson.dumps({
+            "metadata": {},
+            "weight_map": {
+                "a.weight": "shard-00001-of-00002.safetensors",
+                "b.weight": "shard-00002-of-00002.safetensors",
+            },
+        }))
+        src = detect_source(tmp_path)
+        assert src.kind == SourceKind.COMPONENT_DIR
+        assert src.sharded
+        assert src.incomplete
+
+    def test_has_config_flag(self, tmp_path):
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "model.safetensors")
+        (tmp_path / "config.json").write_bytes(orjson.dumps({"model_type": "t"}))
+        src = detect_source(tmp_path)
+        assert src.has_config
+
+    def test_pytorch_dir_detected(self, tmp_path):
+        (tmp_path / "pytorch_model.bin").write_bytes(b"\x00" * 16)
+        (tmp_path / "config.json").write_bytes(orjson.dumps({"model_type": "t"}))
+        src = detect_source(tmp_path)
+        assert src.kind == SourceKind.PYTORCH_DIR
+        assert src.has_config
+
+    def test_display_kind_labels(self, tmp_path):
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "model.safetensors")
+        assert detect_source(tmp_path).display_kind() == "component"
+        f = tmp_path / "loose.safetensors"
+        save_file({"w": torch.randn(2, 2)}, f)
+        assert detect_source(f).display_kind() == "safetensors"

@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from hfutils.formats.safetensors import stream_merge, total_data_bytes
+from hfutils.formats.safetensors import stream_merge
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.progress import copy_with_progress, make_progress
 from hfutils.layouts.comfyui import TARGET_FOLDERS, PackOp, plan_pack
@@ -26,11 +26,11 @@ console = Console()
 
 
 def _stream_merge_with_progress(shards: list[Path], dst: Path) -> None:
-    total = total_data_bytes(shards)
     with make_progress(console) as progress:
-        task = progress.add_task(f"merge -> {dst.name}", total=total)
+        task = progress.add_task(f"merge -> {dst.name}", total=None)
         stream_merge(
             shards, dst,
+            on_total=lambda total: progress.update(task, total=total),
             on_progress=lambda n: progress.update(task, advance=n),
         )
 
@@ -38,18 +38,16 @@ def _stream_merge_with_progress(shards: list[Path], dst: Path) -> None:
 def _execute_op(op: PackOp) -> None:
     op.dest.parent.mkdir(parents=True, exist_ok=True)
     if op.kind == "copy":
-        copy_with_progress(op.source, op.dest, console)
-        return
-    src = detect_source(op.source)
-    if not src.shards:
-        raise typer.Exit(1)
-    _stream_merge_with_progress(src.shards, op.dest)
+        copy_with_progress(op.shards[0], op.dest, console)
+    else:
+        _stream_merge_with_progress(op.shards, op.dest)
 
 
 def _print_op_preview(op: PackOp) -> None:
     console.print()
     console.print(f"[cyan bold]{op.label}[/cyan bold] -> {op.dest}")
-    for line in format_summary_lines(summarize_component(op.source)):
+    preview_path = op.source if op.source is not None else op.shards[0]
+    for line in format_summary_lines(summarize_component(preview_path)):
         console.print(line)
 
 
@@ -75,11 +73,11 @@ def comfyui_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
 ) -> None:
     """Pack a local model into ComfyUI folder layout."""
-    if not source.exists():
-        console.print(f"[red]Error:[/red] source not found: {source}")
+    src = detect_source(source)
+    if src.kind == SourceKind.UNKNOWN:
+        console.print(f"[red]Error:[/red] unrecognized source: {source}")
         raise typer.Exit(1)
 
-    src = detect_source(source)
     resolved_name = name or _default_name(src)
     only_list = [x.strip() for x in only.split(",")] if only else None
     skip_list = [x.strip() for x in skip.split(",")] if skip else None
@@ -116,11 +114,10 @@ def single_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview metadata, write nothing"),
 ) -> None:
     """Merge shards (or copy a single file) into one .safetensors output."""
-    if not source.exists():
-        console.print(f"[red]Error:[/red] source not found: {source}")
-        raise typer.Exit(1)
-
     src = detect_source(source)
+    if src.kind == SourceKind.UNKNOWN:
+        console.print(f"[red]Error:[/red] unrecognized source: {source}")
+        raise typer.Exit(1)
     if src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
         console.print(
             f"[red]Error:[/red] `convert single` expects a component directory or "
@@ -138,9 +135,7 @@ def single_cmd(
         return
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    if len(src.shards) == 1 and src.kind == SourceKind.SAFETENSORS_FILE:
-        copy_with_progress(src.path, output, console)
-    elif len(src.shards) == 1:
+    if len(src.shards) == 1:
         copy_with_progress(src.shards[0], output, console)
     else:
         _stream_merge_with_progress(src.shards, output)

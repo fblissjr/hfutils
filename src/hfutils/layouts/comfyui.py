@@ -8,7 +8,7 @@ Given a `Source`, produces a list of `PackOp`s that a runner can execute.
 No filesystem writes happen here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -41,10 +41,16 @@ OpKind = Literal["copy", "merge"]
 
 @dataclass
 class PackOp:
-    label: str            # pipeline component name or "single"
-    source: Path          # file or directory
-    dest: Path            # absolute output file
-    kind: OpKind          # "copy" for single-file, "merge" for streaming merge of shards
+    label: str                          # pipeline component name or "single"
+    dest: Path                          # absolute output file
+    shards: list[Path] = field(default_factory=list)  # one entry => copy; many => merge
+    # `source` points at the user-visible source (a file or a directory) for
+    # display; operations consume `shards` directly.
+    source: Path | None = None
+
+    @property
+    def kind(self) -> OpKind:
+        return "copy" if len(self.shards) == 1 else "merge"
 
 
 def _component_dest(component: str, comfyui_root: Path, name: str) -> Path:
@@ -63,14 +69,12 @@ def _target_dest(target: str, comfyui_root: Path, name: str) -> Path:
 def _plan_component(source: Source, component: str, comfyui_root: Path, name: str) -> PackOp:
     subdir = source.path / component
     shards = sorted(subdir.glob("*.safetensors"))
-    dest = _component_dest(component, comfyui_root, name)
-    if len(shards) == 1:
-        return PackOp(label=component, source=shards[0], dest=dest, kind="copy")
-    return PackOp(label=component, source=subdir, dest=dest, kind="merge")
-
-
-def _kind_for_files(shards: list[Path]) -> OpKind:
-    return "merge" if len(shards) > 1 else "copy"
+    return PackOp(
+        label=component,
+        source=subdir,
+        shards=shards,
+        dest=_component_dest(component, comfyui_root, name),
+    )
 
 
 def plan_pack(
@@ -106,12 +110,11 @@ def plan_pack(
             valid = ", ".join(sorted(TARGET_FOLDERS))
             hint = "single file" if source.kind == SourceKind.SAFETENSORS_FILE else "component directory"
             raise ValueError(f"Source is a {hint}; specify destination with --as ({valid})")
-        op_source = source.shards[0] if len(source.shards) == 1 else source.path
         return [PackOp(
             label="single",
-            source=op_source,
+            source=source.path,
+            shards=list(source.shards),
             dest=_target_dest(target, comfyui_root, name),
-            kind=_kind_for_files(source.shards),
         )]
 
     raise ValueError(f"Cannot pack source kind {source.kind.value} into ComfyUI layout")

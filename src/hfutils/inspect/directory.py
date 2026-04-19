@@ -9,7 +9,7 @@ from pathlib import Path
 
 import orjson
 
-from hfutils.inspect.common import SafetensorsHeader
+from hfutils.inspect.common import SafetensorsHeader, read_json_if_exists
 from hfutils.inspect.gguf import GGUFInfo, read_gguf_header
 from hfutils.inspect.safetensors import read_header
 
@@ -33,10 +33,7 @@ def inspect_directory(path: Path) -> DirectoryInfo:
     path = Path(path)
     info = DirectoryInfo(path=path)
 
-    # Read config.json
-    config_path = path / "config.json"
-    if config_path.exists():
-        info.config = orjson.loads(config_path.read_bytes())
+    info.config = read_json_if_exists(path / "config.json")
 
     # Find model files
     for f in sorted(path.iterdir()):

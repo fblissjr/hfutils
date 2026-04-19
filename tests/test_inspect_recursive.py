@@ -49,3 +49,28 @@ class TestInspectRecursive:
         result = runner.invoke(app, ["inspect", str(tmp_path), "--recursive"])
         assert result.exit_code == 0, result.output
         assert "author/name" in result.output
+
+    def test_incomplete_shard_shown_as_incomplete(self, tmp_path):
+        d = tmp_path / "broken"
+        d.mkdir()
+        save_file({"a.weight": torch.randn(2, 2)}, d / "shard-00001-of-00002.safetensors")
+        (d / "model.safetensors.index.json").write_bytes(orjson.dumps({
+            "metadata": {},
+            "weight_map": {
+                "a.weight": "shard-00001-of-00002.safetensors",
+                "b.weight": "shard-00002-of-00002.safetensors",
+            },
+        }))
+
+        result = runner.invoke(app, ["inspect", str(tmp_path), "--recursive"])
+        assert result.exit_code == 0, result.output
+        assert "INCOMPLETE" in result.output
+
+    def test_missing_config_shown(self, tmp_path):
+        d = tmp_path / "no_cfg"
+        d.mkdir()
+        save_file({"w": torch.randn(2, 2)}, d / "model.safetensors")
+
+        result = runner.invoke(app, ["inspect", str(tmp_path), "--recursive"])
+        assert result.exit_code == 0, result.output
+        assert "no config" in result.output

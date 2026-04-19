@@ -206,29 +206,33 @@ def _walk_for_models(root: Path) -> list[tuple[str, Source]]:
     return found
 
 
-def _summarize_source_for_table(src: Source) -> tuple[int, int, str]:
-    """Return (total_bytes, file_count, kind_label) for the scan table."""
+def _summarize_source_for_table(src: Source) -> tuple[int, int]:
+    """Return (total_bytes, file_count) for the scan table."""
     if src.kind == SourceKind.DIFFUSERS_PIPELINE:
         total = 0
         files = 0
         for component in src.components:
-            for f in (src.path / component).glob("*.safetensors"):
-                total += f.stat().st_size
-                files += 1
-        return total, files, "pipeline"
+            for f in (src.path / component).iterdir():
+                if f.is_file() and f.suffix == ".safetensors":
+                    total += f.stat().st_size
+                    files += 1
+        return total, files
 
     if src.kind == SourceKind.COMPONENT_DIR:
-        total = sum(f.stat().st_size for f in src.shards)
-        label = "sharded" if src.sharded else "component"
-        return total, len(src.shards), label
+        return sum(f.stat().st_size for f in src.shards), len(src.shards)
 
-    if src.kind == SourceKind.SAFETENSORS_FILE:
-        return src.path.stat().st_size, 1, "safetensors"
+    if src.kind in (SourceKind.SAFETENSORS_FILE, SourceKind.GGUF_FILE):
+        return src.path.stat().st_size, 1
 
-    if src.kind == SourceKind.GGUF_FILE:
-        return src.path.stat().st_size, 1, "gguf"
+    return 0, 0
 
-    return 0, 0, "unknown"
+
+def _status_label(src: Source) -> str:
+    if src.incomplete:
+        return "[red]INCOMPLETE[/red]"
+    if not src.has_config:
+        return "[yellow]no config[/yellow]"
+    return "[green]ok[/green]"
 
 
 def _display_tree(root: Path, entries: list[tuple[str, Source]]) -> None:
@@ -237,12 +241,13 @@ def _display_tree(root: Path, entries: list[tuple[str, Source]]) -> None:
     table.add_column("Kind")
     table.add_column("Size", justify="right")
     table.add_column("Files", justify="right")
+    table.add_column("Status")
 
     total_size = 0
     for name, src in entries:
-        size, count, kind_label = _summarize_source_for_table(src)
+        size, count = _summarize_source_for_table(src)
         total_size += size
-        table.add_row(name, kind_label, format_size(size), str(count))
+        table.add_row(name, src.display_kind(), format_size(size), str(count), _status_label(src))
 
     console.print(table)
     console.print(f"\n  Total: {len(entries)} models, {format_size(total_size)}")

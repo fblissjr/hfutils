@@ -6,8 +6,6 @@ Reads only safetensors headers and config.json -- never loads tensor data.
 from dataclasses import dataclass
 from pathlib import Path
 
-import orjson
-
 from hfutils.inspect.architecture import architecture_name_from_config, detect_architecture
 from hfutils.inspect.common import (
     DtypeBreakdown,
@@ -15,6 +13,7 @@ from hfutils.inspect.common import (
     SafetensorsHeader,
     format_params,
     format_size,
+    read_json_if_exists,
 )
 from hfutils.inspect.safetensors import read_header
 
@@ -53,14 +52,9 @@ def _merge_breakdowns(headers: list[SafetensorsHeader]) -> list[DtypeBreakdown]:
 
 def _detect_architecture_name(source: Path, headers: list[SafetensorsHeader]) -> str | None:
     config_dir = source if source.is_dir() else source.parent
-    config_path = config_dir / "config.json"
-    if config_path.exists():
-        try:
-            config = orjson.loads(config_path.read_bytes())
-        except orjson.JSONDecodeError:
-            config = None
-        if (name := architecture_name_from_config(config)):
-            return name
+    config = read_json_if_exists(config_dir / "config.json")
+    if (name := architecture_name_from_config(config)):
+        return name
 
     names = [t.name for h in headers for t in h.tensors]
     info = detect_architecture(names)

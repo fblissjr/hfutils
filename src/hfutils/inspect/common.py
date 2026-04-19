@@ -1,6 +1,24 @@
 """Shared types and formatting for model inspection."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import orjson
+
+
+def read_json_if_exists(path: Path) -> dict | None:
+    """Load JSON at `path`, or return None if missing / unreadable / malformed.
+
+    Central helper so `inspect_directory`, `summary`, and `detect_source` share
+    the same forgiving semantics for config files like `config.json` and
+    `model_index.json`.
+    """
+    if not path.is_file():
+        return None
+    try:
+        return orjson.loads(path.read_bytes())
+    except (orjson.JSONDecodeError, OSError):
+        return None
 
 
 def format_size(size_bytes: int, decimals: int = 2) -> str:

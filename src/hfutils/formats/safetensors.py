@@ -20,8 +20,7 @@ from pathlib import Path
 import orjson
 
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
-
-_COPY_CHUNK = 4 * 1024 * 1024  # 4 MiB
+from hfutils.io.progress import COPY_CHUNK
 
 
 def _merge_metadata(headers: list[RawHeader]) -> dict[str, str]:
@@ -85,6 +84,7 @@ def stream_merge(
     shard_paths: list[Path],
     output_path: Path,
     *,
+    on_total: Callable[[int], None] | None = None,
     on_progress: Callable[[int], None] | None = None,
 ) -> None:
     """Merge sharded safetensors files into one output, without loading tensors.
@@ -92,8 +92,12 @@ def stream_merge(
     Preserves each shard's tensor insertion order; shards are processed in the
     order given. Raises ValueError on duplicate tensor names across shards.
 
+    `on_total`, if provided, is called once with the total tensor-data byte
+    count before any copying starts, so a caller can size a progress bar
+    without paying for a separate header-read pass.
+
     `on_progress` is called after each chunk write with the number of bytes
-    just written. Total bytes = sum of (shard_size - shard_header_overhead).
+    just written.
     """
     if not shard_paths:
         raise ValueError("stream_merge requires at least one shard")
@@ -101,19 +105,22 @@ def stream_merge(
     headers = [read_raw_header(p) for p in shard_paths]
     header_bytes, plan = _build_merged_header_json(headers, shard_paths)
 
+    if on_total is not None:
+        on_total(sum(size for _, _, size, _ in plan))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "wb") as out:
         out.write(struct.pack("<Q", len(header_bytes)))
         out.write(header_bytes)
-        data_region_start = out.tell()
 
-        for shard_path, src_offset, size, dst_offset in plan:
-            out.seek(data_region_start + dst_offset)
+        # `plan` is built in increasing dst_offset order, so the file position
+        # is always correct after each copy -- no seeks needed on the output.
+        for shard_path, src_offset, size, _dst_offset in plan:
             with open(shard_path, "rb") as src:
                 src.seek(src_offset)
                 remaining = size
                 while remaining > 0:
-                    chunk = src.read(min(_COPY_CHUNK, remaining))
+                    chunk = src.read(min(COPY_CHUNK, remaining))
                     if not chunk:
                         raise IOError(
                             f"Unexpected EOF reading {shard_path} "
@@ -123,13 +130,3 @@ def stream_merge(
                     remaining -= len(chunk)
                     if on_progress is not None:
                         on_progress(len(chunk))
-
-
-def total_data_bytes(shard_paths: list[Path]) -> int:
-    """Sum of tensor-data bytes across shards. Use to pre-size a progress bar."""
-    total = 0
-    for p in shard_paths:
-        h = read_raw_header(p)
-        for entry in h.tensors:
-            total += entry.data_offset_end - entry.data_offset_start
-    return total

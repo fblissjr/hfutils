@@ -98,16 +98,19 @@ class TestStreamMerge:
             cursor = entry.data_offset_end
         assert cursor == total_data
 
-    def test_peak_memory_is_bounded_by_chunk_size(self, tmp_path):
-        # Write a shard with a "large" tensor. Stream merge it. Memory delta
-        # should be nowhere near the tensor size.
-        import resource
-        big = torch.zeros(4096, 4096, dtype=torch.float32)  # 64 MiB
+    def test_peak_python_allocations_bounded(self, tmp_path):
+        # Stream-merging a 64 MiB shard must not trigger Python allocations
+        # anywhere near the tensor size. tracemalloc scopes to Python heap
+        # (unlike RSS, which is process-wide and depends on cold state).
+        import tracemalloc
+
+        big = torch.zeros(4096, 4096, dtype=torch.float32)  # 64 MiB on disk
         save_file({"w": big}, tmp_path / "a.safetensors")
-        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        del big
+
+        tracemalloc.start()
         stream_merge([tmp_path / "a.safetensors"], tmp_path / "out.safetensors")
-        after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # RSS is in KB on Linux; delta should be well under 32 MiB.
-        # (The source tensor is already loaded once by save_file() before this test;
-        # streaming itself should not add another 64 MiB.)
-        assert after - before < 32 * 1024, f"peak RSS grew by {(after - before) / 1024:.1f} MiB"
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        assert peak < 16 * 1024 * 1024, f"peak Python allocation was {peak / 1024 / 1024:.1f} MiB"

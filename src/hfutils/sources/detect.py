@@ -1,8 +1,9 @@
-"""Classify a local path into a handled source shape.
+"""Single classification point for CLI inputs.
 
-Consolidates the four detection paths the codebase used to carry: `merge`
-globbed for an index, `comfyui pack` sniffed for model_index.json, `inspect`
-looked at extensions, `scan` walked. All those live here now.
+`detect_source(path)` returns a `Source` describing what was found --
+pipeline, component dir, safetensors file, gguf file, pytorch dir, or
+unknown -- along with completeness and config-presence flags that the
+recursive inspect table surfaces.
 """
 
 from dataclasses import dataclass, field
@@ -11,17 +12,25 @@ from pathlib import Path
 
 import orjson
 
-# Diffusers subfolder names we treat as components. ComfyUI's `unet` folder
-# name is gone in modern releases; its diffusers equivalent is `transformer`.
+from hfutils.inspect.common import read_json_if_exists
+
+# Diffusers subfolders we recognize. Weights-bearing ones (transformer, vae,
+# text_encoder[_N]) are the `convert comfyui` candidates; scheduler/tokenizer
+# are listed so detection works on full pipelines even though they carry no
+# weights we ship.
 DIFFUSERS_COMPONENT_NAMES: tuple[str, ...] = (
     "transformer",
     "vae",
     "text_encoder",
     "text_encoder_2",
     "text_encoder_3",
-    "scheduler",  # not always a weights folder, but present
-    "tokenizer",  # ditto
+    "scheduler",
+    "tokenizer",
 )
+
+# File suffixes that count as weights when walking a tree. Legacy `.bin/.pt/.pth`
+# pytorch weights are reported but never converted.
+WEIGHT_EXTENSIONS: set[str] = {".safetensors", ".gguf", ".bin", ".pt", ".pth"}
 
 
 class SourceKind(str, Enum):
@@ -29,6 +38,7 @@ class SourceKind(str, Enum):
     COMPONENT_DIR = "component_dir"
     SAFETENSORS_FILE = "safetensors_file"
     GGUF_FILE = "gguf_file"
+    PYTORCH_DIR = "pytorch_dir"
     UNKNOWN = "unknown"
 
 
@@ -36,32 +46,80 @@ class SourceKind(str, Enum):
 class Source:
     path: Path
     kind: SourceKind
-    # DIFFUSERS_PIPELINE: subfolder names that contain safetensors weights.
+    # DIFFUSERS_PIPELINE: subfolder names that contain weights.
     components: list[str] = field(default_factory=list)
-    # COMPONENT_DIR: shard paths (1 = single-file, N = sharded).
-    # SAFETENSORS_FILE: [self].
+    # COMPONENT_DIR or SAFETENSORS_FILE: safetensors file paths.
     shards: list[Path] = field(default_factory=list)
-    # True iff a *.safetensors.index.json exists alongside the shards.
+    # True iff a *.safetensors.index.json sits alongside the shards.
     sharded: bool = False
+    # Index file lists shards that aren't all on disk. COMPONENT_DIR only.
+    incomplete: bool = False
+    # config.json present next to the weights (or model_index.json for pipelines).
+    has_config: bool = False
     # DIFFUSERS_PIPELINE: parsed model_index.json.
     pipeline_meta: dict | None = None
 
+    def display_kind(self) -> str:
+        """Short human label for table rows."""
+        if self.kind == SourceKind.COMPONENT_DIR:
+            return "sharded" if self.sharded else "component"
+        if self.kind == SourceKind.DIFFUSERS_PIPELINE:
+            return "pipeline"
+        if self.kind == SourceKind.SAFETENSORS_FILE:
+            return "safetensors"
+        if self.kind == SourceKind.GGUF_FILE:
+            return "gguf"
+        if self.kind == SourceKind.PYTORCH_DIR:
+            return "pytorch"
+        return "unknown"
 
-def _component_has_weights(subdir: Path) -> bool:
-    return subdir.is_dir() and any(subdir.glob("*.safetensors"))
+
+def _dir_has_weight_file(subdir: Path) -> bool:
+    if not subdir.is_dir():
+        return False
+    for child in subdir.iterdir():
+        if child.is_file() and child.suffix in WEIGHT_EXTENSIONS:
+            return True
+    return False
 
 
-def _detect_component_dir(path: Path) -> Source | None:
+def _check_incomplete(index_path: Path, present_names: set[str]) -> bool:
+    try:
+        index = orjson.loads(index_path.read_bytes())
+    except (orjson.JSONDecodeError, OSError):
+        return False
+    expected = set(index.get("weight_map", {}).values())
+    return bool(expected - present_names)
+
+
+def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
     shards = sorted(path.glob("*.safetensors"))
-    if not shards:
-        return None
-    sharded = any(path.glob("*.safetensors.index.json"))
-    return Source(
-        path=path,
-        kind=SourceKind.COMPONENT_DIR,
-        shards=shards,
-        sharded=sharded,
+    has_config = (path / "config.json").is_file()
+
+    if shards:
+        index_candidates = sorted(path.glob("*.safetensors.index.json"))
+        sharded = bool(index_candidates)
+        incomplete = (
+            _check_incomplete(index_candidates[0], {f.name for f in shards})
+            if sharded else False
+        )
+        return Source(
+            path=path,
+            kind=SourceKind.COMPONENT_DIR,
+            shards=shards,
+            sharded=sharded,
+            incomplete=incomplete,
+            has_config=has_config,
+        )
+
+    legacy_pytorch = any(
+        f.is_file() and f.suffix in {".bin", ".pt", ".pth"}
+        for f in path.iterdir()
     )
+    if legacy_pytorch:
+        return Source(path=path, kind=SourceKind.PYTORCH_DIR, has_config=has_config)
+
+    return None
 
 
 def detect_source(path: Path) -> Source:
@@ -70,34 +128,26 @@ def detect_source(path: Path) -> Source:
 
     if path.is_file():
         if path.suffix == ".safetensors":
-            return Source(
-                path=path,
-                kind=SourceKind.SAFETENSORS_FILE,
-                shards=[path],
-            )
+            return Source(path=path, kind=SourceKind.SAFETENSORS_FILE, shards=[path])
         if path.suffix == ".gguf":
             return Source(path=path, kind=SourceKind.GGUF_FILE)
         return Source(path=path, kind=SourceKind.UNKNOWN)
 
-    # Directory cases.
-    model_index = path / "model_index.json"
-    if model_index.is_file():
-        try:
-            meta = orjson.loads(model_index.read_bytes())
-        except orjson.JSONDecodeError:
-            meta = None
+    if (path / "model_index.json").is_file():
+        meta = read_json_if_exists(path / "model_index.json")
         components = [
             name for name in DIFFUSERS_COMPONENT_NAMES
-            if _component_has_weights(path / name)
+            if _dir_has_weight_file(path / name)
         ]
         return Source(
             path=path,
             kind=SourceKind.DIFFUSERS_PIPELINE,
             components=components,
             pipeline_meta=meta,
+            has_config=True,
         )
 
-    component = _detect_component_dir(path)
+    component = _detect_component_or_pytorch_dir(path)
     if component is not None:
         return component
 

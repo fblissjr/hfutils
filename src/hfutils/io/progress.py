@@ -12,7 +12,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-_COPY_CHUNK = 4 * 1024 * 1024  # 4 MiB
+COPY_CHUNK = 4 * 1024 * 1024  # 4 MiB -- shared with formats.safetensors.stream_merge
 
 
 def make_progress(console: Console) -> Progress:
@@ -33,7 +33,7 @@ def copy_with_progress(src: Path, dst: Path, console: Console) -> None:
         task = progress.add_task(f"copy {src.name}", total=total)
         with open(src, "rb") as fi, open(dst, "wb") as fo:
             while True:
-                chunk = fi.read(_COPY_CHUNK)
+                chunk = fi.read(COPY_CHUNK)
                 if not chunk:
                     break
                 fo.write(chunk)

@@ -95,10 +95,11 @@ class TestPlanPack:
         with pytest.raises(ValueError, match="Unknown"):
             plan_pack(src, tmp_path / "c", name="X", target="bogus")
 
-    def test_packop_is_frozen_dataclass(self):
-        # Make sure the dataclass is still picklable/hashable-friendly.
-        op = PackOp(label="x", source=Path("/a"), dest=Path("/b"), kind="copy")
-        assert op.label == "x"
+    def test_packop_kind_derived_from_shards(self):
+        op_copy = PackOp(label="x", dest=Path("/b"), shards=[Path("/a.safetensors")])
+        op_merge = PackOp(label="x", dest=Path("/b"), shards=[Path("/a.safetensors"), Path("/b.safetensors")])
+        assert op_copy.kind == "copy"
+        assert op_merge.kind == "merge"
 
     def test_target_folders_includes_core_destinations(self):
         for key in ("diffusion_model", "vae", "text_encoder", "checkpoint", "lora"):
