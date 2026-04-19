@@ -1,21 +1,27 @@
 """Single classification point for CLI inputs.
 
-`detect_source(path)` returns a `Source` describing what was found --
-pipeline, component dir, safetensors file, gguf file, pytorch dir, or
-unknown -- along with completeness and config-presence flags that the
-recursive inspect table surfaces.
+`detect_source(path)` returns one of six `Source` variants (see sources/types.py).
+`enrich(source)` optionally reads headers/config for a display-ready view.
 """
 
-from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
-from typing import Literal
 
 import orjson
 
-from hfutils.inspect.common import SafetensorsHeader, read_json_if_exists
-from hfutils.inspect.gguf import GGUFInfo, read_gguf_header
+from hfutils.inspect.common import read_json_if_exists
+from hfutils.inspect.gguf import read_gguf_header
 from hfutils.inspect.safetensors import read_header, read_raw_header
+from hfutils.sources.types import (
+    ComponentSource,
+    EnrichedView,
+    GgufFileSource,
+    IntegrityError,
+    PipelineSource,
+    PytorchDirSource,
+    SafetensorsFileSource,
+    Source,
+    UnknownSource,
+)
 
 # Diffusers subfolders we recognize. Weights-bearing ones (transformer, vae,
 # text_encoder[_N]) are the `convert comfyui` candidates; scheduler/tokenizer
@@ -34,113 +40,6 @@ DIFFUSERS_COMPONENT_NAMES: tuple[str, ...] = (
 # File suffixes that count as weights when walking a tree. Legacy `.bin/.pt/.pth`
 # pytorch weights are reported but never converted.
 WEIGHT_EXTENSIONS: set[str] = {".safetensors", ".gguf", ".bin", ".pt", ".pth"}
-
-
-class SourceKind(str, Enum):
-    DIFFUSERS_PIPELINE = "diffusers_pipeline"
-    COMPONENT_DIR = "component_dir"
-    SAFETENSORS_FILE = "safetensors_file"
-    GGUF_FILE = "gguf_file"
-    PYTORCH_DIR = "pytorch_dir"
-    UNKNOWN = "unknown"
-
-
-IntegrityKind = Literal["truncated", "unreadable_header"]
-
-
-@dataclass
-class IntegrityError:
-    """Structured error for one unhealthy shard. Surfaced in Source.integrity_error
-    so callers can branch on `kind` rather than substring-matching `detail`."""
-    kind: IntegrityKind
-    file: Path
-    detail: str
-
-    def __str__(self) -> str:
-        return f"{self.file.name}: {self.kind} ({self.detail})"
-
-
-@dataclass
-class Source:
-    path: Path
-    kind: SourceKind
-    # DIFFUSERS_PIPELINE: subfolder names that contain weights.
-    components: list[str] = field(default_factory=list)
-    # COMPONENT_DIR or SAFETENSORS_FILE: safetensors file paths.
-    shards: list[Path] = field(default_factory=list)
-    # True iff a *.safetensors.index.json sits alongside the shards.
-    sharded: bool = False
-    # Index file lists shards that aren't all on disk. COMPONENT_DIR only.
-    incomplete: bool = False
-    # Populated when a shard's header is unreadable or its declared tensor-data
-    # size doesn't match the file's physical size. Truncation, corruption, etc.
-    integrity_error: IntegrityError | None = None
-    # config.json present next to the weights (or model_index.json for pipelines).
-    has_config: bool = False
-    # DIFFUSERS_PIPELINE: parsed model_index.json.
-    pipeline_meta: dict | None = None
-
-    # Populated by .enrich() on demand -- reading headers is cheap per-file but
-    # wasteful in batch walks, so detect_source leaves these empty by default.
-    config: dict | None = None
-    total_file_size: int = 0
-    safetensors_headers: list[SafetensorsHeader] = field(default_factory=list)
-    gguf_info: GGUFInfo | None = None
-    _enriched: bool = False
-
-    @property
-    def shard_count(self) -> int:
-        return len(self.shards)
-
-    def display_kind(self) -> str:
-        """Short human label for table rows."""
-        if self.kind == SourceKind.COMPONENT_DIR:
-            return "sharded" if self.sharded else "component"
-        if self.kind == SourceKind.DIFFUSERS_PIPELINE:
-            return "pipeline"
-        if self.kind == SourceKind.SAFETENSORS_FILE:
-            return "safetensors"
-        if self.kind == SourceKind.GGUF_FILE:
-            return "gguf"
-        if self.kind == SourceKind.PYTORCH_DIR:
-            return "pytorch"
-        return "unknown"
-
-    def enrich(self) -> "Source":
-        """Read headers, config, and sizes. Idempotent. Returns self.
-
-        Not thread-safe: callers must not invoke enrich() on the same Source
-        from multiple threads. The recursive walker deliberately skips
-        enrichment and only classifies; display code on the main thread calls
-        enrich() serially afterwards.
-        """
-        if self._enriched:
-            return self
-
-        if self.kind == SourceKind.SAFETENSORS_FILE:
-            _populate_safetensors(self, [self.path], config_dir=self.path.parent)
-        elif self.kind == SourceKind.GGUF_FILE:
-            self.gguf_info = read_gguf_header(self.path)
-            self.total_file_size = self.path.stat().st_size
-        elif self.kind == SourceKind.COMPONENT_DIR:
-            _populate_safetensors(self, self.shards, config_dir=self.path)
-        elif self.kind == SourceKind.PYTORCH_DIR:
-            self.total_file_size = sum(
-                p.stat().st_size for p in self.path.iterdir()
-                if p.is_file() and p.suffix in {".bin", ".pt", ".pth"}
-            )
-            self.config = read_json_if_exists(self.path / "config.json")
-
-        self._enriched = True
-        return self
-
-
-def _populate_safetensors(src: "Source", paths: list[Path], *, config_dir: Path) -> None:
-    """Populate `src` with safetensors headers, total size, and config.json.
-    Shared by SAFETENSORS_FILE and COMPONENT_DIR enrichment paths."""
-    src.safetensors_headers = [read_header(p) for p in paths]
-    src.total_file_size = sum(p.stat().st_size for p in paths)
-    src.config = read_json_if_exists(config_dir / "config.json")
 
 
 def _dir_has_weight_file(subdir: Path) -> bool:
@@ -193,9 +92,8 @@ def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
             if sharded else False
         )
         integrity_error = _check_shard_integrity(shards)
-        return Source(
+        return ComponentSource(
             path=path,
-            kind=SourceKind.COMPONENT_DIR,
             shards=shards,
             sharded=sharded,
             incomplete=incomplete or integrity_error is not None,
@@ -203,26 +101,26 @@ def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
             has_config=has_config,
         )
 
-    legacy_pytorch = any(
-        f.is_file() and f.suffix in {".bin", ".pt", ".pth"}
-        for f in path.iterdir()
+    pytorch_files = sorted(
+        p for p in path.iterdir()
+        if p.is_file() and p.suffix in {".bin", ".pt", ".pth"}
     )
-    if legacy_pytorch:
-        return Source(path=path, kind=SourceKind.PYTORCH_DIR, has_config=has_config)
+    if pytorch_files:
+        return PytorchDirSource(path=path, files=pytorch_files, has_config=has_config)
 
     return None
 
 
 def detect_source(path: Path) -> Source:
     if not path.exists():
-        return Source(path=path, kind=SourceKind.UNKNOWN)
+        return UnknownSource(path=path)
 
     if path.is_file():
         if path.suffix == ".safetensors":
-            return Source(path=path, kind=SourceKind.SAFETENSORS_FILE, shards=[path])
+            return SafetensorsFileSource(path=path)
         if path.suffix == ".gguf":
-            return Source(path=path, kind=SourceKind.GGUF_FILE)
-        return Source(path=path, kind=SourceKind.UNKNOWN)
+            return GgufFileSource(path=path)
+        return UnknownSource(path=path)
 
     if (path / "model_index.json").is_file():
         meta = read_json_if_exists(path / "model_index.json")
@@ -230,16 +128,47 @@ def detect_source(path: Path) -> Source:
             name for name in DIFFUSERS_COMPONENT_NAMES
             if _dir_has_weight_file(path / name)
         ]
-        return Source(
-            path=path,
-            kind=SourceKind.DIFFUSERS_PIPELINE,
-            components=components,
-            pipeline_meta=meta,
-            has_config=True,
-        )
+        return PipelineSource(path=path, components=components, pipeline_meta=meta)
 
     component = _detect_component_or_pytorch_dir(path)
     if component is not None:
         return component
 
-    return Source(path=path, kind=SourceKind.UNKNOWN)
+    return UnknownSource(path=path)
+
+
+def enrich(source: Source) -> EnrichedView:
+    """Read headers, config.json, file sizes. Returns a fresh EnrichedView.
+
+    Callers decide when to pay this cost; the recursive walker deliberately
+    skips it. This function is stateless (no mutation of `source`), so it's
+    safe to call from multiple threads on the same source."""
+    match source:
+        case SafetensorsFileSource(path=p):
+            return EnrichedView(
+                config=read_json_if_exists(p.parent / "config.json"),
+                total_file_size=p.stat().st_size,
+                safetensors_headers=[read_header(p)],
+            )
+        case GgufFileSource(path=p):
+            return EnrichedView(
+                total_file_size=p.stat().st_size,
+                gguf_info=read_gguf_header(p),
+            )
+        case ComponentSource(path=p, shards=shards):
+            return EnrichedView(
+                config=read_json_if_exists(p / "config.json"),
+                total_file_size=sum(s.stat().st_size for s in shards),
+                safetensors_headers=[read_header(s) for s in shards],
+            )
+        case PytorchDirSource(path=p, files=files):
+            return EnrichedView(
+                config=read_json_if_exists(p / "config.json"),
+                total_file_size=sum(f.stat().st_size for f in files),
+            )
+        case PipelineSource():
+            # Pipelines don't enrich at the top level; per-component inspection
+            # calls enrich() on each subdir's detect_source result.
+            return EnrichedView()
+        case UnknownSource():
+            return EnrichedView()

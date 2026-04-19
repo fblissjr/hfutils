@@ -28,14 +28,28 @@ from hfutils.formats.safetensors import (
     verify_output,
 )
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single
-from hfutils.sources.detect import IntegrityError, Source, SourceKind, detect_source
+from hfutils.sources.detect import detect_source, enrich
+from hfutils.sources.types import (
+    ComponentSource,
+    EnrichedView,
+    GgufFileSource,
+    IntegrityError,
+    PipelineSource,
+    PytorchDirSource,
+    SafetensorsFileSource,
+    Source,
+    UnknownSource,
+)
 
 __version__ = "0.6.0"
 
 __all__ = [
     "CollectingMergeObserver",
     "CollectingObserver",
+    "ComponentSource",
     "ConvertTarget",
+    "EnrichedView",
+    "GgufFileSource",
     "HfutilsError",
     "InsufficientSpaceError",
     "IntegrityError",
@@ -45,14 +59,18 @@ __all__ = [
     "NullObserver",
     "Observer",
     "PackOp",
+    "PipelineSource",
     "PlanError",
+    "PytorchDirSource",
+    "SafetensorsFileSource",
     "Source",
     "SourceError",
-    "SourceKind",
     "StreamMergeError",
+    "UnknownSource",
     "VerificationError",
     "__version__",
     "detect_source",
+    "enrich",
     "manifest_from_shards",
     "per_op_merge_observer",
     "plan_pack",

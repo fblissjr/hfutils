@@ -22,7 +22,14 @@ from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import check_free_space
 from hfutils.io.progress import COPY_CHUNK, make_progress
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single  # PackOp for typing
-from hfutils.sources.detect import Source, SourceKind, detect_source
+from hfutils.sources.detect import detect_source
+from hfutils.sources.types import (
+    ComponentSource,
+    PipelineSource,
+    SafetensorsFileSource,
+    Source,
+    UnknownSource,
+)
 
 convert_app = typer.Typer(
     name="convert",
@@ -151,7 +158,7 @@ def _print_plan(ops: list[PackOp], dry_run: bool) -> None:
 
 
 def _default_name(source: Source) -> str:
-    return source.path.stem if source.kind == SourceKind.SAFETENSORS_FILE else source.path.name
+    return source.path.stem if isinstance(source, SafetensorsFileSource) else source.path.name
 
 
 @convert_app.command("comfyui")
@@ -171,7 +178,7 @@ def comfyui_cmd(
 ) -> None:
     """Pack a local model into ComfyUI folder layout."""
     src = detect_source(source)
-    if src.kind == SourceKind.UNKNOWN:
+    if isinstance(src, UnknownSource):
         console.print(f"[red]Error:[/red] unrecognized source: {source}")
         raise typer.Exit(1)
 
@@ -222,11 +229,11 @@ def single_cmd(
 ) -> None:
     """Merge shards (or copy a single file) into one .safetensors output."""
     src = detect_source(source)
-    if src.kind == SourceKind.UNKNOWN:
+    if isinstance(src, UnknownSource):
         console.print(f"[red]Error:[/red] unrecognized source: {source}")
         raise typer.Exit(1)
 
-    if src.kind == SourceKind.DIFFUSERS_PIPELINE:
+    if isinstance(src, PipelineSource):
         if component is None:
             available = ", ".join(src.components) or "(none detected)"
             console.print(
@@ -242,14 +249,14 @@ def single_cmd(
             )
             raise typer.Exit(1)
         src = detect_source(source / component)
-        if src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
+        if not isinstance(src, (ComponentSource, SafetensorsFileSource)):
             console.print(f"[red]Error:[/red] component '{component}' has no safetensors to merge.")
             raise typer.Exit(1)
-    elif src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
+    elif not isinstance(src, (ComponentSource, SafetensorsFileSource)):
         console.print(
             f"[red]Error:[/red] `convert single` expects a component directory, a "
             f"single .safetensors file, or a diffusers pipeline (with --component); "
-            f"got {src.kind.value}."
+            f"got {type(src).__name__}."
         )
         raise typer.Exit(1)
     elif component is not None:

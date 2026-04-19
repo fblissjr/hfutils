@@ -9,7 +9,7 @@ import torch
 from safetensors.torch import save_file
 
 from hfutils.inspect.walker import walk_for_models
-from hfutils.sources.detect import SourceKind
+from hfutils.sources.types import ComponentSource
 
 
 def _make_flat_model(parent: Path, name: str) -> Path:
@@ -35,7 +35,7 @@ class TestWalkForModels:
         found = walk_for_models(tmp_path)
         names = [n for n, _ in found]
         assert names == ["alpha", "beta"]
-        assert all(src.kind == SourceKind.COMPONENT_DIR for _, src in found)
+        assert all(isinstance(src, ComponentSource) for _, src in found)
 
     def test_hf_cache_layout(self, tmp_path):
         _make_hf_cache(tmp_path, "author", "model-a")

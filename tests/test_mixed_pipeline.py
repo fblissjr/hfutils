@@ -11,7 +11,8 @@ from safetensors.torch import save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
-from hfutils.sources.detect import SourceKind, detect_source
+from hfutils.sources.detect import detect_source
+from hfutils.sources.types import PipelineSource
 
 runner = CliRunner()
 
@@ -42,7 +43,7 @@ class TestMixedPipeline:
     def test_detect_source_counts_bin_component(self, tmp_path):
         _make_mixed_pipeline(tmp_path)
         src = detect_source(tmp_path)
-        assert src.kind == SourceKind.DIFFUSERS_PIPELINE
+        assert isinstance(src, PipelineSource)
         # vae has a .bin file; detection treats it as a weight-bearing component
         assert "vae" in src.components
         assert "transformer" in src.components

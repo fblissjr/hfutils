@@ -12,7 +12,17 @@ from rich.table import Table
 
 from hfutils.inspect.architecture import detect_architecture
 from hfutils.inspect.common import SafetensorsHeader, format_params, format_size
-from hfutils.sources.detect import Source, SourceKind, detect_source
+from hfutils.sources.detect import detect_source, enrich
+from hfutils.sources.types import (
+    ComponentSource,
+    GgufFileSource,
+    PipelineSource,
+    PytorchDirSource,
+    SafetensorsFileSource,
+    Source,
+    UnknownSource,
+    display_kind,
+)
 
 
 def _format_arch(arch) -> str | None:
@@ -110,38 +120,42 @@ def display_gguf(info, path: Path, console: Console) -> None:
         console.print(f"  Chat template: {preview}")
 
 
-def display_directory(src: Source, detail: bool, console: Console) -> None:
-    src.enrich()
+def _display_config_fields(config: dict, console: Console) -> None:
+    if "model_type" in config:
+        console.print(f"  Model type: {config['model_type']}")
+    if "architectures" in config:
+        console.print(f"  Architecture: {', '.join(config['architectures'])}")
+    for key, label in (
+        ("hidden_size", "Hidden size"),
+        ("num_hidden_layers", "Layers"),
+        ("num_attention_heads", "Attention heads"),
+        ("vocab_size", "Vocab size"),
+        ("max_position_embeddings", "Max positions"),
+    ):
+        if key in config:
+            console.print(f"  {label}: {config[key]:,}")
+
+
+def display_directory(src: ComponentSource | PytorchDirSource, detail: bool, console: Console) -> None:
+    view = enrich(src)
     console.print(f"\n[bold]{src.path.name}/[/bold]")
 
-    if src.config:
-        c = src.config
-        if "model_type" in c:
-            console.print(f"  Model type: {c['model_type']}")
-        if "architectures" in c:
-            console.print(f"  Architecture: {', '.join(c['architectures'])}")
-        for key, label in (
-            ("hidden_size", "Hidden size"),
-            ("num_hidden_layers", "Layers"),
-            ("num_attention_heads", "Attention heads"),
-            ("vocab_size", "Vocab size"),
-            ("max_position_embeddings", "Max positions"),
-        ):
-            if key in c:
-                console.print(f"  {label}: {c[key]:,}")
+    if view.config:
+        _display_config_fields(view.config, console)
 
-    if not src.shards and not src.gguf_info:
-        if not src.config:
+    shards = src.shards if isinstance(src, ComponentSource) else []
+    if not shards and not view.gguf_info:
+        if not view.config:
             console.print("  No model files or config found.")
         return
 
-    console.print(f"  Files: {len(src.shards) + (1 if src.gguf_info else 0)}")
-    console.print(f"  Total size: {format_size(src.total_file_size)}")
-    if src.sharded:
-        console.print(f"  Sharded: {src.shard_count} shards")
+    console.print(f"  Files: {len(shards) + (1 if view.gguf_info else 0)}")
+    console.print(f"  Total size: {format_size(view.total_file_size)}")
+    if isinstance(src, ComponentSource) and src.sharded:
+        console.print(f"  Sharded: {len(shards)} shards")
 
-    if src.safetensors_headers:
-        combined = SafetensorsHeader.combine(src.safetensors_headers)
+    if view.safetensors_headers:
+        combined = SafetensorsHeader.combine(view.safetensors_headers)
         if combined.tensors:
             console.print(f"  Tensors: {len(combined.tensors)}")
             console.print(f"  Parameters: {format_params(combined.total_params)}")
@@ -153,11 +167,8 @@ def display_directory(src: Source, detail: bool, console: Console) -> None:
             if detail:
                 display_safetensors(combined, src.path, detail=True, console=console, arch=arch)
 
-    if src.gguf_info:
-        display_gguf(src.gguf_info, src.path, console)
 
-
-def display_pipeline(source: Source, detail: bool, console: Console) -> None:
+def display_pipeline(source: PipelineSource, detail: bool, console: Console) -> None:
     console.print(f"\n[bold]{source.path.name}/[/bold] (diffusers pipeline)")
     if source.pipeline_meta and "_class_name" in source.pipeline_meta:
         console.print(f"  Pipeline: {source.pipeline_meta['_class_name']}")
@@ -166,63 +177,65 @@ def display_pipeline(source: Source, detail: bool, console: Console) -> None:
         subdir = source.path / component
         if not subdir.is_dir():
             continue
-        display_directory(detect_source(subdir), detail, console)
+        sub = detect_source(subdir)
+        if isinstance(sub, (ComponentSource, PytorchDirSource)):
+            display_directory(sub, detail, console)
 
 
 def display_source(source: Source, detail: bool, console: Console) -> None:
-    if source.kind == SourceKind.SAFETENSORS_FILE:
-        source.enrich()
-        display_safetensors(source.safetensors_headers[0], source.path, detail, console)
-    elif source.kind == SourceKind.GGUF_FILE:
-        source.enrich()
-        display_gguf(source.gguf_info, source.path, console)
-    elif source.kind in (SourceKind.COMPONENT_DIR, SourceKind.PYTORCH_DIR):
-        display_directory(source, detail, console)
-    elif source.kind == SourceKind.DIFFUSERS_PIPELINE:
-        display_pipeline(source, detail, console)
-    else:
-        import typer
-        console.print(f"[red]Error:[/red] could not classify {source.path}")
-        raise typer.Exit(1)
+    match source:
+        case SafetensorsFileSource(path=p):
+            view = enrich(source)
+            display_safetensors(view.safetensors_headers[0], p, detail, console)
+        case GgufFileSource(path=p):
+            view = enrich(source)
+            assert view.gguf_info is not None
+            display_gguf(view.gguf_info, p, console)
+        case ComponentSource() | PytorchDirSource():
+            display_directory(source, detail, console)
+        case PipelineSource():
+            display_pipeline(source, detail, console)
+        case UnknownSource(path=p):
+            import typer
+            console.print(f"[red]Error:[/red] could not classify {p}")
+            raise typer.Exit(1)
 
 
 def status_label(src: Source) -> str:
-    if src.integrity_error:
-        return "[red]CORRUPT[/red]"
-    if src.incomplete:
-        return "[red]INCOMPLETE[/red]"
-    if not src.has_config:
-        return "[yellow]no config[/yellow]"
-    return "[green]ok[/green]"
+    match src:
+        case ComponentSource(integrity_error=e) if e is not None:
+            return "[red]CORRUPT[/red]"
+        case ComponentSource(incomplete=True):
+            return "[red]INCOMPLETE[/red]"
+        case ComponentSource(has_config=False) | PytorchDirSource(has_config=False):
+            return "[yellow]no config[/yellow]"
+        case _:
+            return "[green]ok[/green]"
 
 
 def summarize_source_for_table(src: Source) -> tuple[int, int]:
     """Return (total_bytes, file_count) for the recursive-inspect table.
 
-    Uses stat() throughout; never calls Source.enrich() since the table
-    only wants sizes, not headers. Keeps the recursive walk cheap."""
-    if src.kind == SourceKind.DIFFUSERS_PIPELINE:
-        total = 0
-        files = 0
-        for component in src.components:
-            for f in (src.path / component).iterdir():
-                if f.is_file() and f.suffix == ".safetensors":
-                    total += f.stat().st_size
-                    files += 1
-        return total, files
-
-    if src.kind == SourceKind.COMPONENT_DIR:
-        return sum(f.stat().st_size for f in src.shards), len(src.shards)
-
-    if src.kind == SourceKind.PYTORCH_DIR:
-        files = [f for f in src.path.iterdir()
-                 if f.is_file() and f.suffix in {".bin", ".pt", ".pth"}]
-        return sum(f.stat().st_size for f in files), len(files)
-
-    if src.kind in (SourceKind.SAFETENSORS_FILE, SourceKind.GGUF_FILE):
-        return src.path.stat().st_size, 1
-
-    return 0, 0
+    Uses stat() throughout; never calls enrich() since the table only wants
+    sizes, not headers. Keeps the recursive walk cheap."""
+    match src:
+        case PipelineSource(components=components):
+            total = 0
+            files = 0
+            for component in components:
+                for f in (src.path / component).iterdir():
+                    if f.is_file() and f.suffix == ".safetensors":
+                        total += f.stat().st_size
+                        files += 1
+            return total, files
+        case ComponentSource(shards=shards):
+            return sum(f.stat().st_size for f in shards), len(shards)
+        case PytorchDirSource(files=files):
+            return sum(f.stat().st_size for f in files), len(files)
+        case SafetensorsFileSource(path=p) | GgufFileSource(path=p):
+            return p.stat().st_size, 1
+        case _:
+            return 0, 0
 
 
 def display_tree(root: Path, entries: list[tuple[str, Source]], console: Console) -> None:
@@ -237,7 +250,7 @@ def display_tree(root: Path, entries: list[tuple[str, Source]], console: Console
     for name, src in entries:
         size, count = summarize_source_for_table(src)
         total_size += size
-        table.add_row(name, src.display_kind(), format_size(size), str(count), status_label(src))
+        table.add_row(name, display_kind(src), format_size(size), str(count), status_label(src))
 
     console.print(table)
     console.print(f"\n  Total: {len(entries)} models, {format_size(total_size)}")

@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Literal
 
 from hfutils.errors import PlanError
-from hfutils.sources.detect import Source, SourceKind
+from hfutils.sources.types import (
+    ComponentSource,
+    PipelineSource,
+    SafetensorsFileSource,
+    Source,
+)
 
 
 # Diffusers component -> (ComfyUI subfolder, filename suffix).
@@ -76,7 +81,9 @@ def _target_dest(target: str, comfyui_root: Path, name: str) -> Path:
     return comfyui_root / TARGET_FOLDERS[target] / f"{name}.safetensors"
 
 
-def _plan_component(source: Source, component: str, comfyui_root: Path, name: str) -> PackOp | None:
+def _plan_component(
+    source: PipelineSource, component: str, comfyui_root: Path, name: str,
+) -> PackOp | None:
     """Returns None if the component subdir has no safetensors (e.g. legacy
     .bin-only components in a mixed pipeline). Callers filter None out."""
     subdir = source.path / component
@@ -102,46 +109,65 @@ def plan_pack(
 ) -> list[PackOp]:
     """Build a list of operations to pack `source` into `comfyui_root`.
 
-    - DIFFUSERS_PIPELINE: auto-discovers components; `target` is ignored.
+    - PipelineSource: auto-discovers components; `target` is ignored.
       Components known to `DIFFUSERS_COMPONENTS` are packed; unknown components
-      in the pipeline (scheduler/tokenizer) are skipped silently.
-    - COMPONENT_DIR or SAFETENSORS_FILE: requires `target`.
+      (scheduler/tokenizer) are skipped silently.
+    - ComponentSource or SafetensorsFileSource: requires `target`.
     """
-    if source.kind == SourceKind.DIFFUSERS_PIPELINE:
-        ops: list[PackOp] = []
-        for component in source.components:
-            if component not in DIFFUSERS_COMPONENTS:
-                continue
-            if only and component not in only:
-                continue
-            if skip and component in skip:
-                continue
-            op = _plan_component(source, component, comfyui_root, name)
-            if op is not None:
-                ops.append(op)
-        return ops
+    match source:
+        case PipelineSource(components=components):
+            ops: list[PackOp] = []
+            for component in components:
+                if component not in DIFFUSERS_COMPONENTS:
+                    continue
+                if only and component not in only:
+                    continue
+                if skip and component in skip:
+                    continue
+                op = _plan_component(source, component, comfyui_root, name)
+                if op is not None:
+                    ops.append(op)
+            return ops
 
-    if source.kind in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
-        if target is None:
-            valid = ", ".join(sorted(TARGET_FOLDERS))
-            hint = "single file" if source.kind == SourceKind.SAFETENSORS_FILE else "component directory"
-            raise PlanError(f"Source is a {hint}; specify destination with --as ({valid})")
-        return [PackOp(
-            label="single",
-            source=source.path,
-            shards=list(source.shards),
-            dest=_target_dest(target, comfyui_root, name),
-        )]
+        case ComponentSource(path=p, shards=shards):
+            if target is None:
+                valid = ", ".join(sorted(TARGET_FOLDERS))
+                raise PlanError(
+                    f"Source is a component directory; specify destination with --as ({valid})"
+                )
+            return [PackOp(
+                label="single", source=p, shards=list(shards),
+                dest=_target_dest(target, comfyui_root, name),
+            )]
 
-    raise PlanError(f"Cannot pack source kind {source.kind.value} into ComfyUI layout")
+        case SafetensorsFileSource(path=p):
+            if target is None:
+                valid = ", ".join(sorted(TARGET_FOLDERS))
+                raise PlanError(
+                    f"Source is a single file; specify destination with --as ({valid})"
+                )
+            return [PackOp(
+                label="single", source=p, shards=[p],
+                dest=_target_dest(target, comfyui_root, name),
+            )]
+
+        case _:
+            raise PlanError(
+                f"Cannot pack source of type {type(source).__name__} into ComfyUI layout"
+            )
 
 
 def plan_single(source: Source, output: Path) -> PackOp:
     """Build a one-op plan for `convert single`: dump the source's safetensors
-    into `output`. Callers ensure `source` is a COMPONENT_DIR or SAFETENSORS_FILE."""
-    return PackOp(
-        label="single",
-        source=source.path,
-        shards=list(source.shards),
-        dest=output,
-    )
+    into `output`. Callers ensure `source` is a ComponentSource or
+    SafetensorsFileSource."""
+    match source:
+        case ComponentSource(path=p, shards=shards):
+            return PackOp(label="single", source=p, shards=list(shards), dest=output)
+        case SafetensorsFileSource(path=p):
+            return PackOp(label="single", source=p, shards=[p], dest=output)
+        case _:
+            raise PlanError(
+                f"plan_single expects a ComponentSource or SafetensorsFileSource; "
+                f"got {type(source).__name__}"
+            )

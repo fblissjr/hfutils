@@ -14,8 +14,13 @@ def test_detect_source_exported():
 
 def test_source_types_exported():
     assert hfutils.Source is not None
-    assert hfutils.SourceKind is not None
-    assert hfutils.SourceKind.DIFFUSERS_PIPELINE.value == "diffusers_pipeline"
+    assert hfutils.PipelineSource is not None
+    assert hfutils.ComponentSource is not None
+    assert hfutils.SafetensorsFileSource is not None
+    assert hfutils.GgufFileSource is not None
+    assert hfutils.PytorchDirSource is not None
+    assert hfutils.UnknownSource is not None
+    assert hfutils.EnrichedView is not None
 
 
 def test_stream_merge_exported():

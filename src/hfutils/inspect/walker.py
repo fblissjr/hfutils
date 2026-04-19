@@ -12,7 +12,8 @@ sorting on the display name after the fan-in.
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from hfutils.sources.detect import Source, SourceKind, detect_source
+from hfutils.sources.detect import detect_source
+from hfutils.sources.types import Source, UnknownSource
 
 _WALKER_WORKERS = 8
 
@@ -51,7 +52,7 @@ def walk_for_models(root: Path) -> list[tuple[str, Source]]:
 
     found = [
         (name, src) for (name, _), src in zip(candidates, sources)
-        if src.kind != SourceKind.UNKNOWN
+        if not isinstance(src, UnknownSource)
     ]
     found.sort(key=lambda entry: entry[0])
     return found
