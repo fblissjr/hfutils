@@ -30,3 +30,17 @@ def test_plan_pack_exported():
 
 def test_read_raw_header_exported():
     assert callable(hfutils.read_raw_header)
+
+
+def test_verify_output_exported():
+    assert callable(hfutils.verify_output)
+    assert callable(hfutils.manifest_from_shards)
+
+
+def test_integrity_error_exported():
+    err = hfutils.IntegrityError(kind="truncated", file=__import__("pathlib").Path("x"), detail="test")
+    assert err.kind == "truncated"
+
+
+def test_plan_single_exported():
+    assert callable(hfutils.plan_single)

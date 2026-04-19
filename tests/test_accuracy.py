@@ -38,7 +38,8 @@ class TestShardIntegrity:
         src = detect_source(tmp_path)
         assert src.incomplete
         assert src.integrity_error is not None
-        assert "truncated" in src.integrity_error
+        assert src.integrity_error.kind == "truncated"
+        assert src.integrity_error.file == shard
 
     def test_clean_shards_no_integrity_error(self, tmp_path):
         _make_sharded(tmp_path)
@@ -64,34 +65,22 @@ class TestVerifyFlag:
         src_dir = tmp_path / "in"
         src_dir.mkdir()
         _make_sharded(src_dir)
-        out = tmp_path / "out.safetensors"
+        good = tmp_path / "good.safetensors"
 
-        # First merge cleanly, then corrupt the output.
-        result = runner.invoke(app, ["convert", "single", str(src_dir), str(out)])
+        # Produce a known-good output, then corrupt it, then ask the public
+        # verify_output helper whether it still matches the plan's manifest.
+        result = runner.invoke(app, ["convert", "single", str(src_dir), str(good)])
         assert result.exit_code == 0, result.output
 
-        # Corrupt by writing a fake header bad-length -- easier: simulate by
-        # rewriting output with a different tensor name, then running with --verify.
-        # We replay by truncating the output severely; read_raw_header will err.
-        with open(out, "r+b") as f:
-            f.truncate(8)  # leave only the 8-byte length
+        from hfutils.formats.safetensors import manifest_from_shards, verify_output
 
-        # Running verify as a standalone op: re-invoke convert single with --verify
-        # and the same dest file that already "exists" -- but convert will rewrite.
-        # So corrupt AFTER the merge by keeping it corrupt and re-running convert.
-        # Instead we invoke convert again asking for the same output; it'll be
-        # rewritten cleanly, which defeats the test. The cleaner approach: call
-        # _verify_output directly.
-        from hfutils.commands.convert import _verify_output
-        from hfutils.layouts.comfyui import PackOp
+        manifest = manifest_from_shards(sorted(src_dir.glob("*.safetensors")))
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00" * 8)  # 8-byte length prefix only; header read will fail
 
-        op = PackOp(
-            label="x",
-            source=src_dir,
-            shards=sorted(src_dir.glob("*.safetensors")),
-            dest=out,
-        )
-        assert _verify_output(op) is False
+        ok, err = verify_output(bad, manifest)
+        assert ok is False
+        assert err is not None
 
 
 class TestArchitectureRules:

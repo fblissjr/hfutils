@@ -119,3 +119,17 @@ class SafetensorsHeader:
             b.tensor_count += 1
             b.size_bytes += t.size_bytes
         return sorted(by_dtype.values(), key=lambda b: b.size_bytes, reverse=True)
+
+    @classmethod
+    def combine(cls, headers: list["SafetensorsHeader"]) -> "SafetensorsHeader":
+        """Flatten a list of headers into one aggregate for display.
+
+        Metadata is merged last-write-wins; tensor lists are concatenated in
+        input order. Useful when a multi-shard component needs to be summarized
+        with `dtype_breakdown()` or totals across all shards at once."""
+        combined_meta: dict[str, str] = {}
+        combined_tensors: list[TensorInfo] = []
+        for h in headers:
+            combined_meta.update(h.metadata)
+            combined_tensors.extend(h.tensors)
+        return cls(tensors=combined_tensors, metadata=combined_meta)

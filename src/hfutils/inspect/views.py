@@ -12,7 +12,7 @@ from rich.table import Table
 
 from hfutils.inspect.architecture import detect_architecture
 from hfutils.inspect.common import SafetensorsHeader, format_params, format_size
-from hfutils.sources.detect import Source, SourceKind
+from hfutils.sources.detect import Source, SourceKind, detect_source
 
 
 def _format_arch(arch) -> str | None:
@@ -141,21 +141,16 @@ def display_directory(src: Source, detail: bool, console: Console) -> None:
         console.print(f"  Sharded: {src.shard_count} shards")
 
     if src.safetensors_headers:
-        total_params = sum(h.total_params for h in src.safetensors_headers)
-        total_bytes = sum(h.total_size_bytes for h in src.safetensors_headers)
-        total_tensors = sum(len(h.tensors) for h in src.safetensors_headers)
-        if total_tensors:
-            console.print(f"  Tensors: {total_tensors}")
-            console.print(f"  Parameters: {format_params(total_params)}")
-            console.print(f"  Tensor data: {format_size(total_bytes)}")
-            names = [t.name for h in src.safetensors_headers for t in h.tensors]
-            arch = detect_architecture(names)
+        combined = SafetensorsHeader.combine(src.safetensors_headers)
+        if combined.tensors:
+            console.print(f"  Tensors: {len(combined.tensors)}")
+            console.print(f"  Parameters: {format_params(combined.total_params)}")
+            console.print(f"  Tensor data: {format_size(combined.total_size_bytes)}")
+            arch = detect_architecture([t.name for t in combined.tensors])
             arch_str = _format_arch(arch)
             if arch_str:
                 console.print(f"  Detected: {arch_str}")
             if detail:
-                all_tensors = [t for h in src.safetensors_headers for t in h.tensors]
-                combined = SafetensorsHeader(tensors=all_tensors)
                 display_safetensors(combined, src.path, detail=True, console=console, arch=arch)
 
     if src.gguf_info:
@@ -163,7 +158,6 @@ def display_directory(src: Source, detail: bool, console: Console) -> None:
 
 
 def display_pipeline(source: Source, detail: bool, console: Console) -> None:
-    from hfutils.sources.detect import detect_source
     console.print(f"\n[bold]{source.path.name}/[/bold] (diffusers pipeline)")
     if source.pipeline_meta and "_class_name" in source.pipeline_meta:
         console.print(f"  Pipeline: {source.pipeline_meta['_class_name']}")
@@ -203,7 +197,10 @@ def status_label(src: Source) -> str:
 
 
 def summarize_source_for_table(src: Source) -> tuple[int, int]:
-    """Return (total_bytes, file_count) for the recursive-inspect table."""
+    """Return (total_bytes, file_count) for the recursive-inspect table.
+
+    Uses stat() throughout; never calls Source.enrich() since the table
+    only wants sizes, not headers. Keeps the recursive walk cheap."""
     if src.kind == SourceKind.DIFFUSERS_PIPELINE:
         total = 0
         files = 0
@@ -214,9 +211,13 @@ def summarize_source_for_table(src: Source) -> tuple[int, int]:
                     files += 1
         return total, files
 
-    if src.kind in (SourceKind.COMPONENT_DIR, SourceKind.PYTORCH_DIR):
-        src.enrich()
-        return src.total_file_size, len(src.shards) or 0
+    if src.kind == SourceKind.COMPONENT_DIR:
+        return sum(f.stat().st_size for f in src.shards), len(src.shards)
+
+    if src.kind == SourceKind.PYTORCH_DIR:
+        files = [f for f in src.path.iterdir()
+                 if f.is_file() and f.suffix in {".bin", ".pt", ".pth"}]
+        return sum(f.stat().st_size for f in files), len(files)
 
     if src.kind in (SourceKind.SAFETENSORS_FILE, SourceKind.GGUF_FILE):
         return src.path.stat().st_size, 1

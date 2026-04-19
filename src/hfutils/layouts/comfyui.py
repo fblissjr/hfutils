@@ -54,10 +54,8 @@ OpKind = Literal["copy", "merge"]
 class PackOp:
     label: str                          # pipeline component name or "single"
     dest: Path                          # absolute output file
+    source: Path                        # user-visible source (dir or file); display only
     shards: list[Path] = field(default_factory=list)  # one entry => copy; many => merge
-    # `source` points at the user-visible source (a file or a directory) for
-    # display; operations consume `shards` directly.
-    source: Path | None = None
 
     @property
     def kind(self) -> OpKind:
@@ -135,3 +133,14 @@ def plan_pack(
         )]
 
     raise ValueError(f"Cannot pack source kind {source.kind.value} into ComfyUI layout")
+
+
+def plan_single(source: Source, output: Path) -> PackOp:
+    """Build a one-op plan for `convert single`: dump the source's safetensors
+    into `output`. Callers ensure `source` is a COMPONENT_DIR or SAFETENSORS_FILE."""
+    return PackOp(
+        label="single",
+        source=source.path,
+        shards=list(source.shards),
+        dest=output,
+    )

@@ -10,11 +10,16 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from hfutils.formats.safetensors import read_raw_header, stream_merge
+from hfutils.formats.safetensors import (
+    Manifest,
+    manifest_from_shards,
+    stream_merge,
+    verify_output,
+)
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import InsufficientSpaceError, check_free_space
 from hfutils.io.progress import COPY_CHUNK, make_progress
-from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack
+from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single  # PackOp for typing
 from hfutils.sources.detect import Source, SourceKind, detect_source
 
 convert_app = typer.Typer(
@@ -30,31 +35,23 @@ def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
 
 
-def _op_output_bytes(op: PackOp) -> int:
-    """Sum of tensor-data bytes the op will write. Header reads only."""
-    if op.kind == "copy":
-        return op.shards[0].stat().st_size
-    total = 0
-    for shard in op.shards:
-        h = read_raw_header(shard)
-        for t in h.tensors:
-            total += t.data_offset_end - t.data_offset_start
-    return total
+def _op_total_bytes(op: PackOp) -> int:
+    """Total size of the op's source shards via stat().
 
-
-def _rough_op_total(op: PackOp) -> int:
-    """Fast stat-based byte estimate for progress bars. Slightly overcounts
-    merge ops by each shard's header overhead (tens of KB), which is
-    invisible against multi-GB totals."""
+    Preflight uses this directly: a stat-based sum over-estimates merge output
+    size by each shard's header overhead (tens of KB), which is a safe bias
+    for an 'is there enough space' check. Progress bars use the same number,
+    then `stream_merge.on_total` refines merge-op totals once headers parse.
+    """
     return sum(s.stat().st_size for s in op.shards)
 
 
 def _preflight_space(ops: list[PackOp]) -> None:
     """Refuse to start if any destination filesystem lacks space."""
-    by_root: dict[Path, int] = {}
+    from collections import defaultdict
+    by_root: dict[Path, int] = defaultdict(int)
     for op in ops:
-        root = op.dest.parent
-        by_root[root] = by_root.get(root, 0) + _op_output_bytes(op)
+        by_root[op.dest.parent] += _op_total_bytes(op)
     for root, required in by_root.items():
         try:
             check_free_space(root, required)
@@ -63,10 +60,15 @@ def _preflight_space(ops: list[PackOp]) -> None:
             raise typer.Exit(1)
 
 
-def _run_ops(ops: list[PackOp]) -> None:
-    """Execute all ops under a single Progress with an overall + per-op bar."""
-    per_op_totals = [_rough_op_total(op) for op in ops]
+def _run_ops(ops: list[PackOp]) -> dict[Path, Manifest]:
+    """Execute all ops under a single Progress with an overall + per-op bar.
+
+    Returns one Manifest per op, keyed by output path. `verify_output` uses
+    these to avoid re-parsing shard headers.
+    """
+    per_op_totals = [_op_total_bytes(op) for op in ops]
     grand_total = sum(per_op_totals)
+    manifests: dict[Path, Manifest] = {}
 
     with make_progress(console) as progress:
         overall = progress.add_task("overall", total=grand_total)
@@ -87,9 +89,8 @@ def _run_ops(ops: list[PackOp]) -> None:
                         fo.write(chunk)
                         progress.update(op_task, advance=len(chunk))
                         progress.update(overall, advance=len(chunk))
+                manifests[op.dest] = manifest_from_shards([src])
             else:
-                # For merge, stream_merge will tell us the exact total once it
-                # parses headers; reshape the op task to match.
                 def _on_total(total: int, tid: int = op_task) -> None:
                     progress.update(tid, total=total)
 
@@ -97,7 +98,7 @@ def _run_ops(ops: list[PackOp]) -> None:
                     progress.update(tid, advance=n)
                     progress.update(overall, advance=n)
 
-                stream_merge(
+                manifests[op.dest] = stream_merge(
                     op.shards, op.dest,
                     on_total=_on_total,
                     on_progress=_on_progress,
@@ -106,54 +107,23 @@ def _run_ops(ops: list[PackOp]) -> None:
 
             progress.update(op_task, visible=False)
 
+    return manifests
 
-def _verify_output(op: PackOp) -> bool:
-    """Re-read the output header and confirm it matches what the plan said.
 
-    Returns True on success, False on mismatch (and prints the diagnostic).
-    """
-    expected_tensors: dict[str, tuple[str, list[int]]] = {}
-    for shard in op.shards:
-        h = read_raw_header(shard)
-        for t in h.tensors:
-            expected_tensors[t.name] = (t.dtype, t.shape)
-
-    try:
-        out = read_raw_header(op.dest)
-    except (ValueError, OSError) as e:
-        console.print(f"[red]Verify failed for {op.dest.name}:[/red] unreadable output ({e})")
+def _verify_written(dest: Path, manifest: Manifest) -> bool:
+    """Confirm the output at `dest` matches `manifest`. Print on outcome."""
+    ok, error = verify_output(dest, manifest)
+    if not ok:
+        console.print(f"[red]Error:[/red] verify {dest.name}: {error}")
         return False
-    out_tensors = {t.name: (t.dtype, t.shape) for t in out.tensors}
-
-    if set(out_tensors) != set(expected_tensors):
-        missing = set(expected_tensors) - set(out_tensors)
-        extra = set(out_tensors) - set(expected_tensors)
-        msg = []
-        if missing:
-            msg.append(f"missing {len(missing)} tensor(s): {sorted(missing)[:3]}...")
-        if extra:
-            msg.append(f"unexpected {len(extra)} tensor(s): {sorted(extra)[:3]}...")
-        console.print(f"[red]Verify failed for {op.dest.name}:[/red] " + "; ".join(msg))
-        return False
-
-    for name, (dtype, shape) in expected_tensors.items():
-        if out_tensors[name] != (dtype, shape):
-            console.print(
-                f"[red]Verify failed for {op.dest.name}:[/red] "
-                f"{name} dtype/shape mismatch "
-                f"(expected {dtype} {shape}, got {out_tensors[name][0]} {out_tensors[name][1]})"
-            )
-            return False
-
-    console.print(f"[green]Verified[/green] {op.dest.name}: {len(expected_tensors)} tensors match.")
+    console.print(f"[green]Verified[/green] {dest.name}: {len(manifest)} tensors match.")
     return True
 
 
 def _print_op_preview(op: PackOp) -> None:
     console.print()
     console.print(f"[cyan bold]{op.label}[/cyan bold] -> {op.dest}")
-    preview_path = op.source if op.source is not None else op.shards[0]
-    for line in format_summary_lines(summarize_component(preview_path)):
+    for line in format_summary_lines(summarize_component(op.source)):
         console.print(line)
 
 
@@ -214,23 +184,13 @@ def comfyui_cmd(
         return
 
     _preflight_space(ops)
-    _run_ops(ops)
+    manifests = _run_ops(ops)
 
     if verify:
-        if not all(_verify_output(op) for op in ops):
+        if not all(_verify_written(op.dest, manifests[op.dest]) for op in ops):
             raise typer.Exit(2)
 
     console.print(f"\n[green]Done.[/green] Wrote {len(ops)} file(s) under {comfyui_root}")
-
-
-def _single_as_packop(src: Source, output: Path) -> PackOp:
-    """Represent `convert single` as a one-op plan so display stays uniform."""
-    return PackOp(
-        label="single",
-        source=src.path,
-        dest=output,
-        shards=list(src.shards),
-    )
 
 
 @convert_app.command("single")
@@ -280,7 +240,7 @@ def single_cmd(
         console.print("[red]Error:[/red] --component only applies when source is a diffusers pipeline.")
         raise typer.Exit(1)
 
-    op = _single_as_packop(src, output)
+    op = plan_single(src, output)
     _print_plan([op], dry_run)
     _print_op_preview(op)
 
@@ -289,9 +249,9 @@ def single_cmd(
         return
 
     _preflight_space([op])
-    _run_ops([op])
+    manifests = _run_ops([op])
 
-    if verify and not _verify_output(op):
+    if verify and not _verify_written(op.dest, manifests[op.dest]):
         raise typer.Exit(2)
 
     console.print(f"\n[green]Done.[/green] Wrote {output}")

@@ -96,8 +96,14 @@ class TestPlanPack:
             plan_pack(src, tmp_path / "c", name="X", target="bogus")
 
     def test_packop_kind_derived_from_shards(self):
-        op_copy = PackOp(label="x", dest=Path("/b"), shards=[Path("/a.safetensors")])
-        op_merge = PackOp(label="x", dest=Path("/b"), shards=[Path("/a.safetensors"), Path("/b.safetensors")])
+        op_copy = PackOp(
+            label="x", dest=Path("/b"), source=Path("/a"),
+            shards=[Path("/a.safetensors")],
+        )
+        op_merge = PackOp(
+            label="x", dest=Path("/b"), source=Path("/a"),
+            shards=[Path("/a.safetensors"), Path("/b.safetensors")],
+        )
         assert op_copy.kind == "copy"
         assert op_merge.kind == "merge"
 
