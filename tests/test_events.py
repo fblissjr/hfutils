@@ -82,17 +82,18 @@ class TestPlanObserverShape:
 
 
 class TestAdapter:
-    def test_per_op_merge_observer_forwards_tagged_events(self):
-        """per_op_merge_observer adapts a plan-level Observer into a
-        MergeObserver for a single op. Events get tagged with the op."""
+    def test_per_op_merge_observer_forwards_progress_and_warnings(self):
+        """per_op_merge_observer forwards on_progress and on_warning, tagged
+        with the op. on_total is intentionally ignored -- the runner fires
+        on_op_start itself with its own stat-based total."""
         plan_obs = CollectingObserver()
         op_sentinel = "op-A"
         merge_obs = per_op_merge_observer(plan_obs, op_sentinel)
 
-        merge_obs.on_total(1024)
+        merge_obs.on_total(1024)  # no-op at the adapter level
         merge_obs.on_progress(256)
         merge_obs.on_warning("oops")
 
-        assert plan_obs.ops_started == [(op_sentinel, 1024)]
+        assert plan_obs.ops_started == []  # runner's job, not adapter's
         assert plan_obs.progress == [(op_sentinel, 256)]
         assert plan_obs.warnings == [(op_sentinel, "oops")]

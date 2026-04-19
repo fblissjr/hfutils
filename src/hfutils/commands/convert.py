@@ -11,13 +11,14 @@ import typer
 from rich.console import Console
 
 from hfutils.errors import InsufficientSpaceError, PlanError
-from hfutils.events import MergeObserver
+from hfutils.events import RichObserver
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
     stream_merge,
     verify_output,
 )
+from hfutils.runner import PlanRunner
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import check_free_space
 from hfutils.io.progress import COPY_CHUNK, make_progress
@@ -45,27 +46,6 @@ def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
 
 
-class _RichMergeObserver:
-    """MergeObserver that drives a rich Progress task and emits warnings via the console.
-
-    Wraps two tasks: the per-op task (resized when on_total arrives) and the
-    overall task that's advanced in lockstep. Until PlanRunner lands, this
-    lives here; commit 5 will move it into events.py as a reusable observer."""
-
-    def __init__(self, progress, op_task, overall_task) -> None:
-        self._progress = progress
-        self._op_task = op_task
-        self._overall = overall_task
-
-    def on_total(self, total_bytes: int) -> None:
-        self._progress.update(self._op_task, total=total_bytes)
-
-    def on_progress(self, bytes_copied: int) -> None:
-        self._progress.update(self._op_task, advance=bytes_copied)
-        self._progress.update(self._overall, advance=bytes_copied)
-
-    def on_warning(self, message: str) -> None:
-        _warn(message)
 
 
 def _op_total_bytes(op: PackOp) -> int:
@@ -93,45 +73,9 @@ def _preflight_space(ops: list[PackOp]) -> None:
             raise typer.Exit(1)
 
 
-def _run_ops(ops: list[PackOp]) -> dict[Path, Manifest]:
-    """Execute all ops under a single Progress with an overall + per-op bar.
-
-    Returns one Manifest per op, keyed by output path. `verify_output` uses
-    these to avoid re-parsing shard headers.
-    """
-    per_op_totals = [_op_total_bytes(op) for op in ops]
-    grand_total = sum(per_op_totals)
-    manifests: dict[Path, Manifest] = {}
-
-    with make_progress(console) as progress:
-        overall = progress.add_task("overall", total=grand_total)
-
-        for op, op_total in zip(ops, per_op_totals):
-            op.dest.parent.mkdir(parents=True, exist_ok=True)
-            op_task = progress.add_task(
-                f"{op.kind:>5s} -> {op.dest.name}", total=op_total,
-            )
-
-            if op.kind == "copy":
-                src = op.shards[0]
-                with open(src, "rb") as fi, open(op.dest, "wb") as fo:
-                    while True:
-                        chunk = fi.read(COPY_CHUNK)
-                        if not chunk:
-                            break
-                        fo.write(chunk)
-                        progress.update(op_task, advance=len(chunk))
-                        progress.update(overall, advance=len(chunk))
-                manifests[op.dest] = manifest_from_shards([src])
-            else:
-                manifests[op.dest] = stream_merge(
-                    op.shards, op.dest,
-                    observer=_RichMergeObserver(progress, op_task, overall),
-                )
-
-            progress.update(op_task, visible=False)
-
-    return manifests
+def _run_plan(plan: "PackPlan") -> dict[Path, Manifest]:
+    """Execute a plan under a RichObserver-driven Progress."""
+    return PlanRunner(RichObserver(console)).run(plan)
 
 
 def _verify_written(dest: Path, manifest: Manifest) -> bool:
@@ -211,7 +155,7 @@ def comfyui_cmd(
         return
 
     _preflight_space(plan.ops)
-    manifests = _run_ops(plan.ops)
+    manifests = _run_plan(plan)
 
     if verify:
         if not all(_verify_written(op.dest, manifests[op.dest]) for op in plan.ops):
@@ -277,7 +221,7 @@ def single_cmd(
         return
 
     _preflight_space([op])
-    manifests = _run_ops([op])
+    manifests = _run_plan(plan)
 
     if verify and not _verify_written(op.dest, manifests[op.dest]):
         raise typer.Exit(2)

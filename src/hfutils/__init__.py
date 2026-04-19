@@ -18,8 +18,10 @@ from hfutils.events import (
     NullMergeObserver,
     NullObserver,
     Observer,
+    RichObserver,
     per_op_merge_observer,
 )
+from hfutils.runner import PlanRunner
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -69,6 +71,8 @@ __all__ = [
     "PackPlan",
     "PipelineSource",
     "PlanError",
+    "PlanRunner",
+    "RichObserver",
     "PytorchDirSource",
     "SafetensorsFileSource",
     "Source",
