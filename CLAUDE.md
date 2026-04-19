@@ -63,6 +63,7 @@ tests/
 - `uv sync && uv run pytest` -- install + test
 - `uv run hfutils --help` -- verify CLI
 - TDD: failing test first, then implement
+- CLI tests use `typer.testing.CliRunner`: `runner.invoke(app, ["convert", "single", str(src), str(out)])`. See `tests/test_convert_*.py`.
 
 ## Dependencies
 
@@ -74,6 +75,7 @@ tests/
 
 - All JSON via orjson, never stdlib json
 - Rich console for all user-facing output
+- Memory-bound tests use `tracemalloc` (Python-heap scoped), never `ru_maxrss` (process-wide, flaky).
 - **Source abstraction is the spine.** Every command calls `detect_source(path)` first. Never re-invent format sniffing.
 - **Plan/Execute split.** Layout planners (`layouts/comfyui.plan_pack`) return a list of ops with zero filesystem writes. CLI execution is a thin runner.
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path.
@@ -84,6 +86,7 @@ tests/
 
 ## Gotchas
 
+- Pyright "Import X could not be resolved" warnings in tool output are noise -- the language server isn't wired to the uv venv. Ignore unless the import is actually wrong.
 - Do NOT add HF download/search/info commands -- `hf` CLI handles those.
 - Use `typer` (full package), NOT `typer-slim` -- typer-slim doesn't provide the `typer` import.
 - GGUF parser is hand-rolled (struct.unpack) -- the gguf library memmaps entire files including tensor data.
