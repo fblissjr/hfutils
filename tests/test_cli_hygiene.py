@@ -38,8 +38,8 @@ class TestRepeatableOnly:
         comfy = tmp_path / "comfy"
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(tmp_path), str(comfy),
-            "--name", "X",
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X",
             "--only", "transformer",
             "--only", "vae",
         ])
@@ -53,8 +53,8 @@ class TestRepeatableOnly:
         comfy = tmp_path / "comfy"
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(tmp_path), str(comfy),
-            "--name", "X",
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X",
             "--skip", "text_encoder",
             "--skip", "vae",
         ])
@@ -70,8 +70,8 @@ class TestAsEnum:
         save_file({"w": torch.randn(2, 2)}, f)
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(f), str(tmp_path / "c"),
-            "--name", "X", "--as", "bogus",
+            "convert", str(f), "--to", "comfyui",
+            "--root", str(tmp_path / "c"), "--name", "X", "--as", "bogus",
         ])
         assert result.exit_code != 0
         # Typer validation error lists valid values
@@ -83,8 +83,8 @@ class TestAsEnum:
         comfy = tmp_path / "comfy"
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(f), str(comfy),
-            "--name", "X", "--as", "vae",
+            "convert", str(f), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--as", "vae",
         ])
         assert result.exit_code == 0, result.output
         assert (comfy / "vae/X.safetensors").exists()
@@ -96,7 +96,8 @@ class TestUnifiedDryRun:
         save_file({"w": torch.randn(2, 2)}, src)
 
         result = runner.invoke(app, [
-            "convert", "single", str(src), str(tmp_path / "out.safetensors"),
+            "convert", str(src), "--to", "single",
+            "--out", str(tmp_path / "out.safetensors"),
             "--dry-run",
         ])
         assert result.exit_code == 0, result.output
@@ -106,7 +107,8 @@ class TestUnifiedDryRun:
     def test_comfyui_dry_run_shows_plan_header(self, tmp_path):
         _make_pipeline(tmp_path)
         result = runner.invoke(app, [
-            "convert", "comfyui", str(tmp_path), str(tmp_path / "c"),
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(tmp_path / "c"),
             "--name", "X", "--dry-run",
         ])
         assert result.exit_code == 0, result.output

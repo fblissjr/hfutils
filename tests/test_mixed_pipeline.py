@@ -54,8 +54,8 @@ class TestMixedPipeline:
         comfy = tmp_path / "comfy"
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(tmp_path), str(comfy),
-            "--name", "M",
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "M",
         ])
         # Transformer + text_encoder pack cleanly; vae/pytorch_model.bin is
         # silently skipped because the planner only routes safetensors.
@@ -70,8 +70,8 @@ class TestMixedPipeline:
         comfy = tmp_path / "comfy"
 
         result = runner.invoke(app, [
-            "convert", "comfyui", str(tmp_path), str(comfy),
-            "--name", "M", "--only", "vae",
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "M", "--only", "vae",
         ])
         # The vae component has no safetensors, so the plan is empty.
         assert result.exit_code != 0

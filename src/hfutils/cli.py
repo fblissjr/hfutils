@@ -33,12 +33,11 @@ def _main(
 
 
 def _register_commands() -> None:
-    from hfutils.commands import inspect  # noqa: F401  -- registers @app.command
+    # Side-effect imports: each module registers itself via @app.command().
+    from hfutils.commands import convert, inspect  # noqa: F401
     from hfutils.commands.civitai import civitai_app
-    from hfutils.commands.convert import convert_app
 
     app.add_typer(civitai_app, name="civitai")
-    app.add_typer(convert_app, name="convert")
 
 
 _register_commands()

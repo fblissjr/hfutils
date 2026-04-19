@@ -48,7 +48,8 @@ class TestDiskSpaceCheck:
 
         with patch("hfutils.commands.convert.check_free_space", _fake_check):
             result = runner.invoke(app, [
-                "convert", "single", str(src), str(tmp_path / "out.safetensors"),
+                "convert", str(src), "--to", "single",
+                "--out", str(tmp_path / "out.safetensors"),
             ])
         assert result.exit_code == 1
         assert "mocked" in result.output
@@ -106,7 +107,8 @@ class TestMetadataWarnings:
             p.rename(tmp_path / p.name)  # already in tmp_path; noop, but explicit
 
         result = runner.invoke(app, [
-            "convert", "single", str(tmp_path), str(tmp_path / "merged.safetensors"),
+            "convert", str(tmp_path), "--to", "single",
+            "--out", str(tmp_path / "merged.safetensors"),
         ])
         assert result.exit_code == 0, result.output
         assert "warn:" in result.output

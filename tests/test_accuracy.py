@@ -56,7 +56,7 @@ class TestVerifyFlag:
         out = tmp_path / "out.safetensors"
 
         result = runner.invoke(app, [
-            "convert", "single", str(src_dir), str(out), "--verify",
+            "convert", str(src_dir), "--to", "single", "--out", str(out), "--verify",
         ])
         assert result.exit_code == 0, result.output
         assert "Verified" in result.output
@@ -69,7 +69,9 @@ class TestVerifyFlag:
 
         # Produce a known-good output, then corrupt it, then ask the public
         # verify_output helper whether it still matches the plan's manifest.
-        result = runner.invoke(app, ["convert", "single", str(src_dir), str(good)])
+        result = runner.invoke(app, [
+            "convert", str(src_dir), "--to", "single", "--out", str(good),
+        ])
         assert result.exit_code == 0, result.output
 
         from hfutils.formats.safetensors import manifest_from_shards, verify_output
