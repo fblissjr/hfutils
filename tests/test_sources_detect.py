@@ -119,3 +119,59 @@ class TestDetectSource:
         f = tmp_path / "loose.safetensors"
         save_file({"w": torch.randn(2, 2)}, f)
         assert detect_source(f).display_kind() == "safetensors"
+
+
+class TestSourceEnrich:
+    def test_safetensors_file_enrich_reads_header(self, tmp_path):
+        f = tmp_path / "m.safetensors"
+        save_file({"a.weight": torch.randn(4, 4), "a.bias": torch.randn(4)}, f)
+
+        src = detect_source(f).enrich()
+        assert len(src.safetensors_headers) == 1
+        assert src.total_file_size > 0
+        assert len(src.safetensors_headers[0].tensors) == 2
+
+    def test_safetensors_file_enrich_picks_up_parent_config(self, tmp_path):
+        (tmp_path / "config.json").write_bytes(orjson.dumps({"model_type": "llama"}))
+        f = tmp_path / "model.safetensors"
+        save_file({"w": torch.randn(2, 2)}, f)
+
+        src = detect_source(f).enrich()
+        assert src.config is not None
+        assert src.config["model_type"] == "llama"
+
+    def test_component_dir_enrich(self, tmp_path):
+        (tmp_path / "config.json").write_bytes(orjson.dumps({"architectures": ["LlamaForCausalLM"]}))
+        save_file({"w": torch.randn(4, 4)}, tmp_path / "shard-00001-of-00002.safetensors")
+        save_file({"b": torch.randn(4)}, tmp_path / "shard-00002-of-00002.safetensors")
+        (tmp_path / "model.safetensors.index.json").write_bytes(orjson.dumps({
+            "metadata": {},
+            "weight_map": {
+                "w": "shard-00001-of-00002.safetensors",
+                "b": "shard-00002-of-00002.safetensors",
+            },
+        }))
+
+        src = detect_source(tmp_path).enrich()
+        assert src.sharded
+        assert src.shard_count == 2
+        assert src.config is not None
+        assert src.config["architectures"] == ["LlamaForCausalLM"]
+        assert len(src.safetensors_headers) == 2
+        assert src.total_file_size > 0
+
+    def test_enrich_is_idempotent(self, tmp_path):
+        f = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(2, 2)}, f)
+
+        src = detect_source(f)
+        src.enrich()
+        headers_id = id(src.safetensors_headers)
+        src.enrich()
+        assert id(src.safetensors_headers) == headers_id
+
+    def test_empty_dir_enrich_is_noop(self, tmp_path):
+        src = detect_source(tmp_path)
+        src.enrich()
+        assert src.total_file_size == 0
+        assert src.safetensors_headers == []

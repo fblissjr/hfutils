@@ -12,7 +12,9 @@ from pathlib import Path
 
 import orjson
 
-from hfutils.inspect.common import read_json_if_exists
+from hfutils.inspect.common import SafetensorsHeader, read_json_if_exists
+from hfutils.inspect.gguf import GGUFInfo, read_gguf_header
+from hfutils.inspect.safetensors import read_header
 
 # Diffusers subfolders we recognize. Weights-bearing ones (transformer, vae,
 # text_encoder[_N]) are the `convert comfyui` candidates; scheduler/tokenizer
@@ -59,6 +61,18 @@ class Source:
     # DIFFUSERS_PIPELINE: parsed model_index.json.
     pipeline_meta: dict | None = None
 
+    # Populated by .enrich() on demand -- reading headers is cheap per-file but
+    # wasteful in batch walks, so detect_source leaves these empty by default.
+    config: dict | None = None
+    total_file_size: int = 0
+    safetensors_headers: list[SafetensorsHeader] = field(default_factory=list)
+    gguf_info: GGUFInfo | None = None
+    _enriched: bool = False
+
+    @property
+    def shard_count(self) -> int:
+        return len(self.shards)
+
     def display_kind(self) -> str:
         """Short human label for table rows."""
         if self.kind == SourceKind.COMPONENT_DIR:
@@ -72,6 +86,32 @@ class Source:
         if self.kind == SourceKind.PYTORCH_DIR:
             return "pytorch"
         return "unknown"
+
+    def enrich(self) -> "Source":
+        """Read headers, config, and sizes. Idempotent. Returns self."""
+        if self._enriched:
+            return self
+
+        if self.kind == SourceKind.SAFETENSORS_FILE:
+            self.safetensors_headers = [read_header(self.path)]
+            self.total_file_size = self.path.stat().st_size
+            self.config = read_json_if_exists(self.path.parent / "config.json")
+        elif self.kind == SourceKind.GGUF_FILE:
+            self.gguf_info = read_gguf_header(self.path)
+            self.total_file_size = self.path.stat().st_size
+        elif self.kind == SourceKind.COMPONENT_DIR:
+            self.safetensors_headers = [read_header(p) for p in self.shards]
+            self.total_file_size = sum(p.stat().st_size for p in self.shards)
+            self.config = read_json_if_exists(self.path / "config.json")
+        elif self.kind == SourceKind.PYTORCH_DIR:
+            self.total_file_size = sum(
+                p.stat().st_size for p in self.path.iterdir()
+                if p.is_file() and p.suffix in {".bin", ".pt", ".pth"}
+            )
+            self.config = read_json_if_exists(self.path / "config.json")
+
+        self._enriched = True
+        return self
 
 
 def _dir_has_weight_file(subdir: Path) -> bool:

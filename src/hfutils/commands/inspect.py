@@ -9,9 +9,6 @@ from rich.table import Table
 from hfutils.cli import app
 from hfutils.inspect.architecture import detect_architecture
 from hfutils.inspect.common import SafetensorsHeader, format_params, format_size
-from hfutils.inspect.directory import inspect_directory
-from hfutils.inspect.gguf import read_gguf_header
-from hfutils.inspect.safetensors import read_header
 from hfutils.sources.detect import Source, SourceKind, detect_source
 
 console = Console()
@@ -98,11 +95,12 @@ def _display_gguf(info, path: Path) -> None:
         console.print(f"  File type: {info.quantization}")
 
 
-def _display_directory(dir_info, detail: bool) -> None:
-    console.print(f"\n[bold]{dir_info.path.name}/[/bold]")
+def _display_directory(src: Source, detail: bool) -> None:
+    src.enrich()
+    console.print(f"\n[bold]{src.path.name}/[/bold]")
 
-    if dir_info.config:
-        c = dir_info.config
+    if src.config:
+        c = src.config
         if "model_type" in c:
             console.print(f"  Model type: {c['model_type']}")
         if "architectures" in c:
@@ -117,36 +115,36 @@ def _display_directory(dir_info, detail: bool) -> None:
             if key in c:
                 console.print(f"  {label}: {c[key]:,}")
 
-    if not dir_info.model_files:
-        if not dir_info.config:
+    if not src.shards and not src.gguf_info:
+        if not src.config:
             console.print("  No model files or config found.")
         return
 
-    console.print(f"  Files: {len(dir_info.model_files)}")
-    console.print(f"  Total size: {format_size(dir_info.total_file_size)}")
-    if dir_info.sharded:
-        console.print(f"  Sharded: {dir_info.shard_count} shards")
+    console.print(f"  Files: {len(src.shards) + (1 if src.gguf_info else 0)}")
+    console.print(f"  Total size: {format_size(src.total_file_size)}")
+    if src.sharded:
+        console.print(f"  Sharded: {src.shard_count} shards")
 
-    if dir_info.safetensors_headers:
-        total_params = sum(h.total_params for h in dir_info.safetensors_headers)
-        total_bytes = sum(h.total_size_bytes for h in dir_info.safetensors_headers)
-        total_tensors = sum(len(h.tensors) for h in dir_info.safetensors_headers)
+    if src.safetensors_headers:
+        total_params = sum(h.total_params for h in src.safetensors_headers)
+        total_bytes = sum(h.total_size_bytes for h in src.safetensors_headers)
+        total_tensors = sum(len(h.tensors) for h in src.safetensors_headers)
         if total_tensors:
             console.print(f"  Tensors: {total_tensors}")
             console.print(f"  Parameters: {format_params(total_params)}")
             console.print(f"  Tensor data: {format_size(total_bytes)}")
-            names = [t.name for h in dir_info.safetensors_headers for t in h.tensors]
+            names = [t.name for h in src.safetensors_headers for t in h.tensors]
             arch = detect_architecture(names)
             arch_str = _format_arch(arch)
             if arch_str:
                 console.print(f"  Detected: {arch_str}")
             if detail:
-                all_tensors = [t for h in dir_info.safetensors_headers for t in h.tensors]
+                all_tensors = [t for h in src.safetensors_headers for t in h.tensors]
                 combined = SafetensorsHeader(tensors=all_tensors)
-                _display_safetensors(combined, dir_info.path, detail=True, arch=arch)
+                _display_safetensors(combined, src.path, detail=True, arch=arch)
 
-    if dir_info.gguf_info:
-        _display_gguf(dir_info.gguf_info, dir_info.model_files[0])
+    if src.gguf_info:
+        _display_gguf(src.gguf_info, src.path)
 
 
 def _display_pipeline(source: Source, detail: bool) -> None:
@@ -158,17 +156,18 @@ def _display_pipeline(source: Source, detail: bool) -> None:
         subdir = source.path / component
         if not subdir.is_dir():
             continue
-        sub_info = inspect_directory(subdir)
-        _display_directory(sub_info, detail)
+        _display_directory(detect_source(subdir), detail)
 
 
 def _display_source(source: Source, detail: bool) -> None:
     if source.kind == SourceKind.SAFETENSORS_FILE:
-        _display_safetensors(read_header(source.path), source.path, detail)
+        source.enrich()
+        _display_safetensors(source.safetensors_headers[0], source.path, detail)
     elif source.kind == SourceKind.GGUF_FILE:
-        _display_gguf(read_gguf_header(source.path), source.path)
-    elif source.kind == SourceKind.COMPONENT_DIR:
-        _display_directory(inspect_directory(source.path), detail)
+        source.enrich()
+        _display_gguf(source.gguf_info, source.path)
+    elif source.kind in (SourceKind.COMPONENT_DIR, SourceKind.PYTORCH_DIR):
+        _display_directory(source, detail)
     elif source.kind == SourceKind.DIFFUSERS_PIPELINE:
         _display_pipeline(source, detail)
     else:
@@ -218,8 +217,9 @@ def _summarize_source_for_table(src: Source) -> tuple[int, int]:
                     files += 1
         return total, files
 
-    if src.kind == SourceKind.COMPONENT_DIR:
-        return sum(f.stat().st_size for f in src.shards), len(src.shards)
+    if src.kind in (SourceKind.COMPONENT_DIR, SourceKind.PYTORCH_DIR):
+        src.enrich()
+        return src.total_file_size, len(src.shards) or 0
 
     if src.kind in (SourceKind.SAFETENSORS_FILE, SourceKind.GGUF_FILE):
         return src.path.stat().st_size, 1
