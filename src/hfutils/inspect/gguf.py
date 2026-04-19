@@ -17,6 +17,7 @@ GGUF v3 binary layout:
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _GGUF_MAGIC = 0x46554747  # "GGUF" in LE
 _SUPPORTED_VERSIONS = {2, 3}
@@ -61,6 +62,12 @@ class GGUFInfo:
     block_count: int | None = None
     vocab_size: int | None = None
     quantization: str | None = None
+    rope_freq_base: float | None = None
+    rope_freq_scale: float | None = None
+    rope_scaling_type: str | None = None
+    bos_token_id: int | None = None
+    eos_token_id: int | None = None
+    chat_template: str | None = None
 
 
 def _read_string(f) -> str:
@@ -104,7 +111,7 @@ def read_gguf_header(path: Path) -> GGUFInfo:
             raise ValueError(msg)
 
         # Read KV pairs
-        metadata: dict[str, object] = {}
+        metadata: dict[str, Any] = {}
         for _ in range(kv_count):
             key = _read_string(f)
             vtype = struct.unpack("<I", f.read(4))[0]
@@ -117,6 +124,14 @@ def read_gguf_header(path: Path) -> GGUFInfo:
         v = metadata.get(key)
         return int(v) if v is not None else None
 
+    def _float(key: str) -> float | None:
+        v = metadata.get(key)
+        return float(v) if v is not None else None
+
+    def _str(key: str) -> str | None:
+        v = metadata.get(key)
+        return str(v) if v is not None else None
+
     quant = metadata.get("general.file_type")
 
     return GGUFInfo(
@@ -127,4 +142,10 @@ def read_gguf_header(path: Path) -> GGUFInfo:
         block_count=_int(f"{arch}.block_count"),
         vocab_size=_int(f"{arch}.vocab_size"),
         quantization=str(quant) if quant is not None else None,
+        rope_freq_base=_float(f"{arch}.rope.freq_base"),
+        rope_freq_scale=_float(f"{arch}.rope.scaling.factor"),
+        rope_scaling_type=_str(f"{arch}.rope.scaling.type"),
+        bos_token_id=_int("tokenizer.ggml.bos_token_id"),
+        eos_token_id=_int("tokenizer.ggml.eos_token_id"),
+        chat_template=_str("tokenizer.chat_template"),
     )

@@ -33,6 +33,21 @@ _FAMILY_RULES: list[tuple[str, list]] = [
         "single_blocks.",
     ]),
 
+    # Z-Image (Alibaba): all_final_layer prefix is distinctive.
+    # We don't add Qwen3 here: its tensor layout is indistinguishable from
+    # generic Llama-style LLMs without peeking at config.json, which
+    # architecture_name_from_config already handles.
+    ("Z-Image", [
+        "all_final_layer.",
+        re.compile(r".*adaLN_modulation"),
+    ]),
+
+    # AutoencoderKL (Stable Diffusion family VAE): encoder.down_blocks + decoder.up_blocks
+    ("AutoencoderKL", [
+        "encoder.down_blocks.",
+        "decoder.up_blocks.",
+    ]),
+
     # Mochi: blocks.N.attn.qkv_x (dual-stream attention with x/y split)
     ("Mochi", [
         re.compile(r"blocks\.\d+\.attn\.qkv_x\."),

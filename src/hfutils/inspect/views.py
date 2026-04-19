@@ -94,6 +94,20 @@ def display_gguf(info, path: Path, console: Console) -> None:
         console.print(f"  Vocab size: {info.vocab_size:,}")
     if info.quantization is not None:
         console.print(f"  File type: {info.quantization}")
+    if info.rope_freq_base is not None:
+        console.print(f"  RoPE freq base: {info.rope_freq_base:g}")
+    if info.rope_freq_scale is not None:
+        console.print(f"  RoPE freq scale: {info.rope_freq_scale:g}")
+    if info.rope_scaling_type is not None:
+        console.print(f"  RoPE scaling: {info.rope_scaling_type}")
+    if info.bos_token_id is not None:
+        console.print(f"  BOS token id: {info.bos_token_id}")
+    if info.eos_token_id is not None:
+        console.print(f"  EOS token id: {info.eos_token_id}")
+    if info.chat_template is not None:
+        template = info.chat_template.replace("\n", " ")
+        preview = template if len(template) <= 80 else template[:77] + "..."
+        console.print(f"  Chat template: {preview}")
 
 
 def display_directory(src: Source, detail: bool, console: Console) -> None:
@@ -179,6 +193,8 @@ def display_source(source: Source, detail: bool, console: Console) -> None:
 
 
 def status_label(src: Source) -> str:
+    if src.integrity_error:
+        return "[red]CORRUPT[/red]"
     if src.incomplete:
         return "[red]INCOMPLETE[/red]"
     if not src.has_config:

@@ -14,7 +14,7 @@ import orjson
 
 from hfutils.inspect.common import SafetensorsHeader, read_json_if_exists
 from hfutils.inspect.gguf import GGUFInfo, read_gguf_header
-from hfutils.inspect.safetensors import read_header
+from hfutils.inspect.safetensors import read_header, read_raw_header
 
 # Diffusers subfolders we recognize. Weights-bearing ones (transformer, vae,
 # text_encoder[_N]) are the `convert comfyui` candidates; scheduler/tokenizer
@@ -56,6 +56,9 @@ class Source:
     sharded: bool = False
     # Index file lists shards that aren't all on disk. COMPONENT_DIR only.
     incomplete: bool = False
+    # Populated when a shard's header is unreadable or its declared tensor-data
+    # size doesn't match the file's physical size. Truncation, corruption, etc.
+    integrity_error: str | None = None
     # config.json present next to the weights (or model_index.json for pipelines).
     has_config: bool = False
     # DIFFUSERS_PIPELINE: parsed model_index.json.
@@ -132,6 +135,29 @@ def _check_incomplete(index_path: Path, present_names: set[str]) -> bool:
     return bool(expected - present_names)
 
 
+def _check_shard_integrity(shards: list[Path]) -> str | None:
+    """Read each shard's header; confirm declared tensor-data size matches
+    file size. Returns a human-readable error string if anything is off, or
+    None if all shards check out.
+
+    Detects: truncated shards, header length mismatches, and files where
+    the header is unreadable JSON."""
+    for shard in shards:
+        try:
+            raw = read_raw_header(shard)
+        except (ValueError, orjson.JSONDecodeError, OSError) as e:
+            return f"{shard.name}: unreadable header ({e})"
+
+        declared = raw.tensors[-1].data_offset_end if raw.tensors else 0
+        actual = shard.stat().st_size - raw.data_region_start
+        if actual < declared:
+            return (
+                f"{shard.name}: truncated "
+                f"(header declares {declared} bytes of tensor data, file has {actual})"
+            )
+    return None
+
+
 def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
     shards = sorted(path.glob("*.safetensors"))
     has_config = (path / "config.json").is_file()
@@ -143,12 +169,14 @@ def _detect_component_or_pytorch_dir(path: Path) -> Source | None:
             _check_incomplete(index_candidates[0], {f.name for f in shards})
             if sharded else False
         )
+        integrity_error = _check_shard_integrity(shards)
         return Source(
             path=path,
             kind=SourceKind.COMPONENT_DIR,
             shards=shards,
             sharded=sharded,
-            incomplete=incomplete,
+            incomplete=incomplete or integrity_error is not None,
+            integrity_error=integrity_error,
             has_config=has_config,
         )
 

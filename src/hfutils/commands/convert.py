@@ -75,6 +75,48 @@ def _execute_op(op: PackOp) -> None:
         _stream_merge_with_progress(op.shards, op.dest)
 
 
+def _verify_output(op: PackOp) -> bool:
+    """Re-read the output header and confirm it matches what the plan said.
+
+    Returns True on success, False on mismatch (and prints the diagnostic).
+    """
+    expected_tensors: dict[str, tuple[str, list[int]]] = {}
+    for shard in op.shards:
+        h = read_raw_header(shard)
+        for t in h.tensors:
+            expected_tensors[t.name] = (t.dtype, t.shape)
+
+    try:
+        out = read_raw_header(op.dest)
+    except (ValueError, OSError) as e:
+        console.print(f"[red]Verify failed for {op.dest.name}:[/red] unreadable output ({e})")
+        return False
+    out_tensors = {t.name: (t.dtype, t.shape) for t in out.tensors}
+
+    if set(out_tensors) != set(expected_tensors):
+        missing = set(expected_tensors) - set(out_tensors)
+        extra = set(out_tensors) - set(expected_tensors)
+        msg = []
+        if missing:
+            msg.append(f"missing {len(missing)} tensor(s): {sorted(missing)[:3]}...")
+        if extra:
+            msg.append(f"unexpected {len(extra)} tensor(s): {sorted(extra)[:3]}...")
+        console.print(f"[red]Verify failed for {op.dest.name}:[/red] " + "; ".join(msg))
+        return False
+
+    for name, (dtype, shape) in expected_tensors.items():
+        if out_tensors[name] != (dtype, shape):
+            console.print(
+                f"[red]Verify failed for {op.dest.name}:[/red] "
+                f"{name} dtype/shape mismatch "
+                f"(expected {dtype} {shape}, got {out_tensors[name][0]} {out_tensors[name][1]})"
+            )
+            return False
+
+    console.print(f"[green]Verified[/green] {op.dest.name}: {len(expected_tensors)} tensors match.")
+    return True
+
+
 def _print_op_preview(op: PackOp) -> None:
     console.print()
     console.print(f"[cyan bold]{op.label}[/cyan bold] -> {op.dest}")
@@ -107,6 +149,7 @@ def comfyui_cmd(
         case_sensitive=False,
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
+    verify: bool = typer.Option(False, "--verify", help="Re-read each output and confirm tensor names/dtypes/shapes match the plan"),
 ) -> None:
     """Pack a local model into ComfyUI folder layout."""
     src = detect_source(source)
@@ -141,6 +184,11 @@ def comfyui_cmd(
     if dry_run:
         console.print("\n[yellow]Dry run complete[/yellow] -- no files written.")
         return
+
+    if verify:
+        if not all(_verify_output(op) for op in ops):
+            raise typer.Exit(2)
+
     console.print(f"\n[green]Done.[/green] Wrote {len(ops)} file(s) under {comfyui_root}")
 
 
@@ -159,6 +207,7 @@ def single_cmd(
     source: Path = typer.Argument(..., help="Sharded component directory or single .safetensors file"),
     output: Path = typer.Argument(..., help="Output .safetensors file"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
+    verify: bool = typer.Option(False, "--verify", help="Re-read the output and confirm tensor names/dtypes/shapes match the plan"),
 ) -> None:
     """Merge shards (or copy a single file) into one .safetensors output."""
     src = detect_source(source)
@@ -183,4 +232,8 @@ def single_cmd(
 
     _preflight_space([op])
     _execute_op(op)
+
+    if verify and not _verify_output(op):
+        raise typer.Exit(2)
+
     console.print(f"\n[green]Done.[/green] Wrote {output}")
