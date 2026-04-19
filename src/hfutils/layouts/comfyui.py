@@ -9,6 +9,7 @@ No filesystem writes happen here.
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +35,16 @@ TARGET_FOLDERS: dict[str, str] = {
     "clip":            "text_encoders",
     "lora":            "loras",
 }
+
+
+class ConvertTarget(str, Enum):
+    """CLI-facing values for --as. Source of truth for typer validation."""
+    DIFFUSION_MODEL = "diffusion_model"
+    CHECKPOINT = "checkpoint"
+    VAE = "vae"
+    TEXT_ENCODER = "text_encoder"
+    CLIP = "clip"
+    LORA = "lora"
 
 
 OpKind = Literal["copy", "merge"]

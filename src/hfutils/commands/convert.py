@@ -13,7 +13,7 @@ from rich.console import Console
 from hfutils.formats.safetensors import stream_merge
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.progress import copy_with_progress, make_progress
-from hfutils.layouts.comfyui import TARGET_FOLDERS, PackOp, plan_pack
+from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack
 from hfutils.sources.detect import Source, SourceKind, detect_source
 
 convert_app = typer.Typer(
@@ -67,9 +67,13 @@ def comfyui_cmd(
     source: Path = typer.Argument(..., help="Diffusers pipeline dir, component dir, or .safetensors file"),
     comfyui_root: Path = typer.Argument(..., help="ComfyUI models root (contains diffusion_models/, vae/, ...)"),
     name: str | None = typer.Option(None, "--name", help="Output base name (default: source basename)"),
-    only: str | None = typer.Option(None, "--only", help="Comma-separated components to include (pipelines only)"),
-    skip: str | None = typer.Option(None, "--skip", help="Comma-separated components to exclude (pipelines only)"),
-    target: str | None = typer.Option(None, "--as", help=f"Destination type for non-pipeline sources: {', '.join(sorted(TARGET_FOLDERS))}"),
+    only: list[str] = typer.Option([], "--only", help="Pipeline component to include (repeatable)"),
+    skip: list[str] = typer.Option([], "--skip", help="Pipeline component to exclude (repeatable)"),
+    target: ConvertTarget | None = typer.Option(
+        None, "--as",
+        help="Destination type for non-pipeline sources.",
+        case_sensitive=False,
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
 ) -> None:
     """Pack a local model into ComfyUI folder layout."""
@@ -79,13 +83,12 @@ def comfyui_cmd(
         raise typer.Exit(1)
 
     resolved_name = name or _default_name(src)
-    only_list = [x.strip() for x in only.split(",")] if only else None
-    skip_list = [x.strip() for x in skip.split(",")] if skip else None
+    target_value = target.value if target is not None else None
 
     try:
         ops = plan_pack(
             src, comfyui_root, resolved_name,
-            only=only_list, skip=skip_list, target=target,
+            only=only or None, skip=skip or None, target=target_value,
         )
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -107,11 +110,21 @@ def comfyui_cmd(
     console.print(f"\n[green]Done.[/green] Wrote {len(ops)} file(s) under {comfyui_root}")
 
 
+def _single_as_packop(src: Source, output: Path) -> PackOp:
+    """Represent `convert single` as a one-op plan so display stays uniform."""
+    return PackOp(
+        label="single",
+        source=src.path,
+        dest=output,
+        shards=list(src.shards),
+    )
+
+
 @convert_app.command("single")
 def single_cmd(
     source: Path = typer.Argument(..., help="Sharded component directory or single .safetensors file"),
     output: Path = typer.Argument(..., help="Output .safetensors file"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview metadata, write nothing"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
 ) -> None:
     """Merge shards (or copy a single file) into one .safetensors output."""
     src = detect_source(source)
@@ -122,21 +135,17 @@ def single_cmd(
         console.print(
             f"[red]Error:[/red] `convert single` expects a component directory or "
             f"a single .safetensors file; got {src.kind.value}. "
-            f"For a diffusers pipeline, use `convert comfyui` with --only."
+            f"For a diffusers pipeline, use `convert comfyui` or (upcoming) --component."
         )
         raise typer.Exit(1)
 
-    console.print(f"[cyan bold]{source.name}[/cyan bold] -> {output}")
-    for line in format_summary_lines(summarize_component(source)):
-        console.print(line)
+    op = _single_as_packop(src, output)
+    _print_plan([op], dry_run)
+    _print_op_preview(op)
 
     if dry_run:
         console.print("\n[yellow]Dry run complete[/yellow] -- no files written.")
         return
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if len(src.shards) == 1:
-        copy_with_progress(src.shards[0], output, console)
-    else:
-        _stream_merge_with_progress(src.shards, output)
-    console.print("[green]Done.[/green]")
+    _execute_op(op)
+    console.print(f"\n[green]Done.[/green] Wrote {output}")
