@@ -63,3 +63,12 @@ class TestWalkForModels:
 
         found = walk_for_models(tmp_path)
         assert [n for n, _ in found] == ["model"]
+
+    def test_many_entries_deterministic_order(self, tmp_path):
+        # Enough entries to exercise thread-pool completion jitter.
+        names = [f"model_{i:03d}" for i in range(20)]
+        for n in names:
+            _make_flat_model(tmp_path, n)
+
+        found = walk_for_models(tmp_path)
+        assert [n for n, _ in found] == sorted(names)
