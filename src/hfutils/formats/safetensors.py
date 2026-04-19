@@ -19,6 +19,7 @@ from pathlib import Path
 
 import orjson
 
+from hfutils.errors import StreamMergeError
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import COPY_CHUNK
 
@@ -68,7 +69,7 @@ def _build_merged_header_json(
     for shard_path, header in zip(shard_paths, headers):
         for entry in header.tensors:
             if entry.name in tensors_json:
-                raise ValueError(
+                raise StreamMergeError(
                     f"Duplicate tensor '{entry.name}' in shards -- "
                     f"previously seen, also present in {shard_path.name}"
                 )
@@ -128,7 +129,7 @@ def stream_merge(
     surface these to the user.
     """
     if not shard_paths:
-        raise ValueError("stream_merge requires at least one shard")
+        raise StreamMergeError("stream_merge requires at least one shard")
 
     headers = [read_raw_header(p) for p in shard_paths]
     header_bytes, plan, warnings = _build_merged_header_json(headers, shard_paths)
@@ -159,7 +160,7 @@ def stream_merge(
                 while remaining > 0:
                     chunk = src.read(min(COPY_CHUNK, remaining))
                     if not chunk:
-                        raise IOError(
+                        raise StreamMergeError(
                             f"Unexpected EOF reading {shard_path} "
                             f"({remaining} bytes remaining)"
                         )

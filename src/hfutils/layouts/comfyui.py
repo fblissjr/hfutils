@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+from hfutils.errors import PlanError
 from hfutils.sources.detect import Source, SourceKind
 
 
@@ -69,7 +70,7 @@ def _component_dest(component: str, comfyui_root: Path, name: str) -> Path:
 
 def _target_dest(target: str, comfyui_root: Path, name: str) -> Path:
     if target not in TARGET_FOLDERS:
-        raise ValueError(
+        raise PlanError(
             f"Unknown --as target '{target}'. Valid: {', '.join(sorted(TARGET_FOLDERS))}"
         )
     return comfyui_root / TARGET_FOLDERS[target] / f"{name}.safetensors"
@@ -124,7 +125,7 @@ def plan_pack(
         if target is None:
             valid = ", ".join(sorted(TARGET_FOLDERS))
             hint = "single file" if source.kind == SourceKind.SAFETENSORS_FILE else "component directory"
-            raise ValueError(f"Source is a {hint}; specify destination with --as ({valid})")
+            raise PlanError(f"Source is a {hint}; specify destination with --as ({valid})")
         return [PackOp(
             label="single",
             source=source.path,
@@ -132,7 +133,7 @@ def plan_pack(
             dest=_target_dest(target, comfyui_root, name),
         )]
 
-    raise ValueError(f"Cannot pack source kind {source.kind.value} into ComfyUI layout")
+    raise PlanError(f"Cannot pack source kind {source.kind.value} into ComfyUI layout")
 
 
 def plan_single(source: Source, output: Path) -> PackOp:

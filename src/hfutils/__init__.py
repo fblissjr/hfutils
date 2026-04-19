@@ -3,6 +3,14 @@
 Library surface for programmatic use. The CLI is at `hfutils.cli:app`.
 """
 
+from hfutils.errors import (
+    HfutilsError,
+    InsufficientSpaceError,
+    PlanError,
+    SourceError,
+    StreamMergeError,
+    VerificationError,
+)
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -17,11 +25,17 @@ __version__ = "0.6.0"
 
 __all__ = [
     "ConvertTarget",
+    "HfutilsError",
+    "InsufficientSpaceError",
     "IntegrityError",
     "Manifest",
     "PackOp",
+    "PlanError",
     "Source",
+    "SourceError",
     "SourceKind",
+    "StreamMergeError",
+    "VerificationError",
     "__version__",
     "detect_source",
     "manifest_from_shards",

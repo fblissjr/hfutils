@@ -6,6 +6,7 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
+from hfutils.errors import HfutilsError, StreamMergeError
 from hfutils.formats.safetensors import stream_merge
 from hfutils.inspect.safetensors import read_raw_header
 
@@ -66,7 +67,15 @@ class TestStreamMerge:
         t1 = {"w": torch.randn(2, 2)}
         t2 = {"w": torch.randn(2, 2)}
         shards = _write_shards(tmp_path, [t1, t2])
-        with pytest.raises(ValueError, match="[Dd]uplicate"):
+        with pytest.raises(StreamMergeError, match="[Dd]uplicate"):
+            stream_merge(shards, tmp_path / "out.safetensors")
+
+    def test_duplicate_key_is_catchable_as_hfutils_error(self, tmp_path):
+        """Library consumers can catch the base HfutilsError without picking subtypes."""
+        t1 = {"w": torch.randn(2, 2)}
+        t2 = {"w": torch.randn(2, 2)}
+        shards = _write_shards(tmp_path, [t1, t2])
+        with pytest.raises(HfutilsError):
             stream_merge(shards, tmp_path / "out.safetensors")
 
     def test_preserves_metadata_when_consistent(self, tmp_path):

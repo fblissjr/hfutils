@@ -10,6 +10,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from hfutils.errors import InsufficientSpaceError, PlanError
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -17,7 +18,7 @@ from hfutils.formats.safetensors import (
     verify_output,
 )
 from hfutils.inspect.summary import format_summary_lines, summarize_component
-from hfutils.io.fs import InsufficientSpaceError, check_free_space
+from hfutils.io.fs import check_free_space
 from hfutils.io.progress import COPY_CHUNK, make_progress
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack, plan_single  # PackOp for typing
 from hfutils.sources.detect import Source, SourceKind, detect_source
@@ -167,7 +168,7 @@ def comfyui_cmd(
             src, comfyui_root, resolved_name,
             only=only or None, skip=skip or None, target=target_value,
         )
-    except ValueError as e:
+    except PlanError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 

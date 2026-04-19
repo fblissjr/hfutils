@@ -3,15 +3,14 @@
 import shutil
 from pathlib import Path
 
+from hfutils.errors import InsufficientSpaceError
 from hfutils.inspect.common import format_size
 
-
-class InsufficientSpaceError(RuntimeError):
-    """Raised when a planned write would exceed available free space."""
+__all__ = ["InsufficientSpaceError", "check_free_space"]
 
 
 def check_free_space(dest: Path, required: int) -> None:
-    """Raise InsufficientSpaceError if `dest`'s filesystem can't hold `required` bytes.
+    """Raise `InsufficientSpaceError` if `dest`'s filesystem can't hold `required` bytes.
 
     Resolves to the nearest existing ancestor when `dest` itself doesn't exist
     (common case: the output directory hasn't been created yet).

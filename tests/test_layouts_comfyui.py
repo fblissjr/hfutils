@@ -7,6 +7,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from hfutils.errors import PlanError
 from hfutils.layouts.comfyui import (
     TARGET_FOLDERS,
     PackOp,
@@ -57,7 +58,7 @@ class TestPlanPack:
         save_file({"w": torch.randn(2, 2)}, f)
         src = detect_source(f)
 
-        with pytest.raises(ValueError, match="--as"):
+        with pytest.raises(PlanError, match="--as"):
             plan_pack(src, tmp_path / "c", name="X")
 
     def test_single_file_with_target(self, tmp_path):
@@ -92,7 +93,7 @@ class TestPlanPack:
         save_file({"w": torch.randn(2, 2)}, f)
         src = detect_source(f)
 
-        with pytest.raises(ValueError, match="Unknown"):
+        with pytest.raises(PlanError, match="Unknown"):
             plan_pack(src, tmp_path / "c", name="X", target="bogus")
 
     def test_packop_kind_derived_from_shards(self):
