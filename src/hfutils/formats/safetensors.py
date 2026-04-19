@@ -23,24 +23,34 @@ from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import COPY_CHUNK
 
 
-def _merge_metadata(headers: list[RawHeader]) -> dict[str, str]:
+def _merge_metadata(
+    headers: list[RawHeader],
+    shard_paths: list[Path],
+) -> tuple[dict[str, str], list[str]]:
     """Merge __metadata__ dicts from all shards. Last-write-wins on conflict.
 
-    Sharded checkpoints typically replicate the same metadata across shards,
-    so this is rarely ambiguous. We don't error on conflict because tools
-    like transformers stamp `total_size` per shard, which is meaningless in
-    the merged file anyway.
+    Returns `(merged, warnings)`. `warnings` lists human-readable messages for
+    every key whose value changed between shards. Sharded checkpoints
+    typically replicate the same metadata everywhere, so the warnings list is
+    usually empty; when it isn't, the caller should surface it so the user
+    knows the final file inherited only the last shard's value.
     """
     merged: dict[str, str] = {}
-    for h in headers:
-        merged.update(h.metadata)
-    return merged
+    warnings: list[str] = []
+    for path, h in zip(shard_paths, headers):
+        for key, value in h.metadata.items():
+            if key in merged and merged[key] != value:
+                warnings.append(
+                    f"metadata key '{key}': {path.name} overrode prior value"
+                )
+            merged[key] = value
+    return merged, warnings
 
 
 def _build_merged_header_json(
     headers: list[RawHeader],
     shard_paths: list[Path],
-) -> tuple[bytes, list[tuple[Path, int, int, int]]]:
+) -> tuple[bytes, list[tuple[Path, int, int, int]], list[str]]:
     """Produce the output header JSON and a list of copy plans.
 
     Returns:
@@ -73,11 +83,11 @@ def _build_merged_header_json(
             ))
             cursor += size
 
-    metadata = _merge_metadata(headers)
+    metadata, warnings = _merge_metadata(headers, shard_paths)
     if metadata:
         tensors_json["__metadata__"] = metadata
 
-    return orjson.dumps(tensors_json), plan
+    return orjson.dumps(tensors_json), plan, warnings
 
 
 def stream_merge(
@@ -86,6 +96,7 @@ def stream_merge(
     *,
     on_total: Callable[[int], None] | None = None,
     on_progress: Callable[[int], None] | None = None,
+    on_warning: Callable[[str], None] | None = None,
 ) -> None:
     """Merge sharded safetensors files into one output, without loading tensors.
 
@@ -98,12 +109,20 @@ def stream_merge(
 
     `on_progress` is called after each chunk write with the number of bytes
     just written.
+
+    `on_warning` is called for each metadata-key conflict across shards. The
+    merged file inherits the last shard's value; callers usually want to
+    surface these to the user.
     """
     if not shard_paths:
         raise ValueError("stream_merge requires at least one shard")
 
     headers = [read_raw_header(p) for p in shard_paths]
-    header_bytes, plan = _build_merged_header_json(headers, shard_paths)
+    header_bytes, plan, warnings = _build_merged_header_json(headers, shard_paths)
+
+    if on_warning is not None:
+        for msg in warnings:
+            on_warning(msg)
 
     if on_total is not None:
         on_total(sum(size for _, _, size, _ in plan))

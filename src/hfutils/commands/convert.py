@@ -10,8 +10,9 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from hfutils.formats.safetensors import stream_merge
+from hfutils.formats.safetensors import read_raw_header, stream_merge
 from hfutils.inspect.summary import format_summary_lines, summarize_component
+from hfutils.io.fs import InsufficientSpaceError, check_free_space
 from hfutils.io.progress import copy_with_progress, make_progress
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_pack
 from hfutils.sources.detect import Source, SourceKind, detect_source
@@ -25,6 +26,10 @@ convert_app = typer.Typer(
 console = Console()
 
 
+def _warn(msg: str) -> None:
+    console.print(f"[yellow]warn:[/yellow] {msg}")
+
+
 def _stream_merge_with_progress(shards: list[Path], dst: Path) -> None:
     with make_progress(console) as progress:
         task = progress.add_task(f"merge -> {dst.name}", total=None)
@@ -32,7 +37,34 @@ def _stream_merge_with_progress(shards: list[Path], dst: Path) -> None:
             shards, dst,
             on_total=lambda total: progress.update(task, total=total),
             on_progress=lambda n: progress.update(task, advance=n),
+            on_warning=_warn,
         )
+
+
+def _op_output_bytes(op: PackOp) -> int:
+    """Sum of tensor-data bytes the op will write. Header reads only."""
+    if op.kind == "copy":
+        return op.shards[0].stat().st_size
+    total = 0
+    for shard in op.shards:
+        h = read_raw_header(shard)
+        for t in h.tensors:
+            total += t.data_offset_end - t.data_offset_start
+    return total
+
+
+def _preflight_space(ops: list[PackOp]) -> None:
+    """Refuse to start if any destination filesystem lacks space."""
+    by_root: dict[Path, int] = {}
+    for op in ops:
+        root = op.dest.parent
+        by_root[root] = by_root.get(root, 0) + _op_output_bytes(op)
+    for root, required in by_root.items():
+        try:
+            check_free_space(root, required)
+        except InsufficientSpaceError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
 
 
 def _execute_op(op: PackOp) -> None:
@@ -99,6 +131,8 @@ def comfyui_cmd(
         raise typer.Exit(1)
 
     _print_plan(ops, dry_run)
+    if not dry_run:
+        _preflight_space(ops)
     for op in ops:
         _print_op_preview(op)
         if not dry_run:
@@ -147,5 +181,6 @@ def single_cmd(
         console.print("\n[yellow]Dry run complete[/yellow] -- no files written.")
         return
 
+    _preflight_space([op])
     _execute_op(op)
     console.print(f"\n[green]Done.[/green] Wrote {output}")
