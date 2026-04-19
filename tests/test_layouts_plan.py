@@ -9,18 +9,7 @@ from safetensors.torch import save_file
 from hfutils.layouts.comfyui import PackOp, plan_comfyui, plan_single
 from hfutils.layouts.plan import PackPlan
 from hfutils.sources.detect import detect_source
-
-
-def _make_sharded(d: Path) -> None:
-    save_file({"a": torch.randn(4, 4)}, d / "shard-00001.safetensors")
-    save_file({"b": torch.randn(4, 4)}, d / "shard-00002.safetensors")
-    (d / "model.safetensors.index.json").write_bytes(orjson.dumps({
-        "metadata": {},
-        "weight_map": {
-            "a": "shard-00001.safetensors",
-            "b": "shard-00002.safetensors",
-        },
-    }))
+from tests.conftest import make_sharded_component as _make_sharded
 
 
 class TestPackPlan:

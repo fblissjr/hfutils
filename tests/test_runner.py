@@ -1,8 +1,5 @@
 """PlanRunner: executes a PackPlan, dispatches events to an Observer."""
 
-from pathlib import Path
-
-import orjson
 import torch
 from safetensors.torch import load_file, save_file
 
@@ -10,18 +7,7 @@ from hfutils.events import CollectingObserver
 from hfutils.layouts.comfyui import plan_single
 from hfutils.runner import PlanRunner
 from hfutils.sources.detect import detect_source
-
-
-def _make_sharded(d: Path) -> None:
-    save_file({"a": torch.randn(4, 4)}, d / "shard-00001.safetensors")
-    save_file({"b": torch.randn(4, 4)}, d / "shard-00002.safetensors")
-    (d / "model.safetensors.index.json").write_bytes(orjson.dumps({
-        "metadata": {},
-        "weight_map": {
-            "a": "shard-00001.safetensors",
-            "b": "shard-00002.safetensors",
-        },
-    }))
+from tests.conftest import make_sharded_component as _make_sharded
 
 
 class TestPlanRunner:
@@ -37,9 +23,9 @@ class TestPlanRunner:
 
         assert out.exists()
         assert out in manifests
-        assert set(manifests[out]) == {"a", "b"}
+        assert set(manifests[out]) == {"a.weight", "a.bias", "b.weight", "b.bias"}
         merged = load_file(str(out))
-        assert set(merged.keys()) == {"a", "b"}
+        assert set(merged.keys()) == {"a.weight", "a.bias", "b.weight", "b.bias"}
 
     def test_observer_sees_plan_and_op_lifecycle(self, tmp_path):
         src_dir = tmp_path / "src"

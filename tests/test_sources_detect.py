@@ -15,18 +15,7 @@ from hfutils.sources.types import (
     SafetensorsFileSource,
     UnknownSource,
 )
-
-
-def _make_sharded(subdir: Path, index_name: str) -> None:
-    save_file({"a.weight": torch.randn(4, 4)}, subdir / "shard-00001-of-00002.safetensors")
-    save_file({"b.weight": torch.randn(4, 4)}, subdir / "shard-00002-of-00002.safetensors")
-    (subdir / index_name).write_bytes(orjson.dumps({
-        "metadata": {},
-        "weight_map": {
-            "a.weight": "shard-00001-of-00002.safetensors",
-            "b.weight": "shard-00002-of-00002.safetensors",
-        },
-    }))
+from tests.conftest import make_sharded_component as _make_sharded
 
 
 class TestDetectSource:
@@ -48,7 +37,7 @@ class TestDetectSource:
         assert src.pipeline_meta["_class_name"] == "TestPipeline"
 
     def test_sharded_component_dir(self, tmp_path):
-        _make_sharded(tmp_path, "model.safetensors.index.json")
+        _make_sharded(tmp_path, index_name="model.safetensors.index.json")
 
         src = detect_source(tmp_path)
         assert isinstance(src, ComponentSource)
@@ -64,7 +53,7 @@ class TestDetectSource:
         assert len(src.shards) == 1
 
     def test_diffusers_naming_for_sharded_component(self, tmp_path):
-        _make_sharded(tmp_path, "diffusion_pytorch_model.safetensors.index.json")
+        _make_sharded(tmp_path, index_name="diffusion_pytorch_model.safetensors.index.json")
 
         src = detect_source(tmp_path)
         assert isinstance(src, ComponentSource)

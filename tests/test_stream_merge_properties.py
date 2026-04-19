@@ -75,28 +75,6 @@ def _write_shards(tmp: Path, shards: list[dict[str, torch.Tensor]]) -> list[Path
 
 
 class TestStreamMergeRoundTrip:
-    @given(tensors=tensor_dict())
-    @settings(max_examples=50, deadline=None)
-    def test_round_trip(self, tensors, tmp_path_factory):
-        """stream_merge + safetensors.load_file round-trip preserves every tensor."""
-        tmp = tmp_path_factory.mktemp("merge")
-
-        # Use a Hypothesis-generated shard split. Can't nest @given cleanly,
-        # so hand-roll a split here: just one shard for simplicity -- the
-        # multi-shard property is covered below.
-        shards = _write_shards(tmp, [tensors])
-        out = tmp / "merged.safetensors"
-
-        stream_merge(shards, out)
-
-        merged = load_file(str(out))
-        assert set(merged.keys()) == set(tensors.keys())
-        for k, v in tensors.items():
-            assert merged[k].dtype == v.dtype
-            assert list(merged[k].shape) == list(v.shape)
-            # Bytewise equality: the merger moves bytes verbatim.
-            assert torch.equal(merged[k].view(torch.uint8), v.view(torch.uint8))
-
     @given(data=st.data())
     @settings(max_examples=30, deadline=None)
     def test_multi_shard_round_trip(self, data, tmp_path_factory):

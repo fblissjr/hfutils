@@ -51,6 +51,10 @@ def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
 
 
+def _error(msg: str) -> None:
+    console.print(f"[red]Error:[/red] {msg}")
+
+
 def _op_total_bytes(op: PackOp) -> int:
     """Stat-based byte total per op. Safe bias for preflight."""
     return sum(s.stat().st_size for s in op.shards)
@@ -65,7 +69,7 @@ def _preflight_space(ops: list[PackOp]) -> None:
         try:
             check_free_space(root, required)
         except InsufficientSpaceError as e:
-            console.print(f"[red]Error:[/red] {e}")
+            _error(str(e))
             raise typer.Exit(1)
 
 
@@ -86,7 +90,7 @@ def _print_op_preview(op: PackOp) -> None:
 def _verify_written(dest: Path, manifest: Manifest) -> bool:
     ok, error = verify_output(dest, manifest)
     if not ok:
-        console.print(f"[red]Error:[/red] verify {dest.name}: {error}")
+        _error(f"verify {dest.name}: {error}")
         return False
     console.print(f"[green]Verified[/green] {dest.name}: {len(manifest)} tensors match.")
     return True
@@ -102,7 +106,7 @@ def _default_name(source: Source) -> str:
 
 def _require_option(value, flag: str, layout: str) -> None:
     if value is None:
-        console.print(f"[red]Error:[/red] `--to {layout}` requires {flag}.")
+        _error(f"`--to {layout}` requires {flag}.")
         raise typer.Exit(1)
 
 
@@ -129,7 +133,7 @@ def _plan_comfyui_from_cli(
             only=only or None, skip=skip or None, target=target_value,
         )
     except PlanError as e:
-        console.print(f"[red]Error:[/red] {e}")
+        _error(str(e))
         raise typer.Exit(1)
 
 
@@ -144,31 +148,31 @@ def _plan_single_from_cli(
     if isinstance(src, PipelineSource):
         if component is None:
             available = ", ".join(src.components) or "(none detected)"
-            console.print(
-                f"[red]Error:[/red] source is a diffusers pipeline; "
+            _error(
+                f"source is a diffusers pipeline; "
                 f"pass --component to pick one. Available: {available}"
             )
             raise typer.Exit(1)
         if component not in src.components:
             available = ", ".join(src.components) or "(none detected)"
-            console.print(
-                f"[red]Error:[/red] component '{component}' not found in pipeline. "
+            _error(
+                f"component '{component}' not found in pipeline. "
                 f"Available: {available}"
             )
             raise typer.Exit(1)
         src = detect_source(source_path / component)
         if not isinstance(src, (ComponentSource, SafetensorsFileSource)):
-            console.print(f"[red]Error:[/red] component '{component}' has no safetensors to merge.")
+            _error(f"component '{component}' has no safetensors to merge.")
             raise typer.Exit(1)
     elif not isinstance(src, (ComponentSource, SafetensorsFileSource)):
-        console.print(
-            f"[red]Error:[/red] `--to single` expects a component directory, a "
+        _error(
+            f"`--to single` expects a component directory, a "
             f"single .safetensors file, or a diffusers pipeline (with --component); "
             f"got {type(src).__name__}."
         )
         raise typer.Exit(1)
     elif component is not None:
-        console.print("[red]Error:[/red] --component only applies when source is a diffusers pipeline.")
+        _error("--component only applies when source is a diffusers pipeline.")
         raise typer.Exit(1)
 
     return plan_single(src, out)  # type: ignore[arg-type]
@@ -210,7 +214,7 @@ def convert(
     """Convert a local model. `--to` picks the target layout."""
     src = detect_source(source)
     if isinstance(src, UnknownSource):
-        console.print(f"[red]Error:[/red] unrecognized source: {source}")
+        _error(f"unrecognized source: {source}")
         raise typer.Exit(1)
 
     if to == ConvertLayout.COMFYUI:

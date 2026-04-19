@@ -1,50 +1,14 @@
 """CLI-level tests for `hfutils convert <src> --to <layout>`."""
 
-from pathlib import Path
-
-import orjson
 import torch
 from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
+from tests.conftest import make_diffusers_pipeline as _make_pipeline
+from tests.conftest import make_sharded_component as _make_sharded
 
 runner = CliRunner()
-
-
-def _make_sharded(subdir: Path, shard_prefix: str = "shard", index_name: str = "model.safetensors.index.json") -> dict[str, torch.Tensor]:
-    t1 = {"a.weight": torch.randn(4, 4), "a.bias": torch.randn(4)}
-    t2 = {"b.weight": torch.randn(4, 4), "b.bias": torch.randn(4)}
-    save_file(t1, subdir / f"{shard_prefix}-00001-of-00002.safetensors")
-    save_file(t2, subdir / f"{shard_prefix}-00002-of-00002.safetensors")
-    (subdir / index_name).write_bytes(orjson.dumps({
-        "metadata": {},
-        "weight_map": {
-            **{k: f"{shard_prefix}-00001-of-00002.safetensors" for k in t1},
-            **{k: f"{shard_prefix}-00002-of-00002.safetensors" for k in t2},
-        },
-    }))
-    return {**t1, **t2}
-
-
-def _make_pipeline(tmp: Path) -> None:
-    (tmp / "model_index.json").write_bytes(orjson.dumps({
-        "_class_name": "P",
-        "transformer": ["diffusers", "T"],
-        "vae": ["diffusers", "V"],
-        "text_encoder": ["transformers", "E"],
-    }))
-    (tmp / "transformer").mkdir()
-    (tmp / "transformer/config.json").write_bytes(orjson.dumps({"_class_name": "T"}))
-    _make_sharded(
-        tmp / "transformer",
-        shard_prefix="diffusion_pytorch_model",
-        index_name="diffusion_pytorch_model.safetensors.index.json",
-    )
-    (tmp / "vae").mkdir()
-    save_file({"enc.w": torch.randn(3, 3)}, tmp / "vae/diffusion_pytorch_model.safetensors")
-    (tmp / "text_encoder").mkdir()
-    save_file({"emb.w": torch.randn(3, 3)}, tmp / "text_encoder/model.safetensors")
 
 
 class TestConvertToComfyui:

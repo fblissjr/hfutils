@@ -1,10 +1,5 @@
 """Tests for shard integrity detection, --verify, and new architecture rules."""
 
-from pathlib import Path
-
-import orjson
-import torch
-from safetensors.torch import save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
@@ -14,23 +9,14 @@ from hfutils.sources.detect import DetectLevel, detect_source
 runner = CliRunner()
 
 
-def _make_sharded(dir_path: Path) -> None:
-    save_file({"a": torch.randn(4, 4)}, dir_path / "shard-00001.safetensors")
-    save_file({"b": torch.randn(4, 4)}, dir_path / "shard-00002.safetensors")
-    (dir_path / "model.safetensors.index.json").write_bytes(orjson.dumps({
-        "metadata": {},
-        "weight_map": {
-            "a": "shard-00001.safetensors",
-            "b": "shard-00002.safetensors",
-        },
-    }))
+from tests.conftest import make_sharded_component as _make_sharded  # noqa: E402
 
 
 class TestShardIntegrity:
     def test_truncated_shard_flagged(self, tmp_path):
         _make_sharded(tmp_path)
         # Truncate one shard in the middle of its tensor data
-        shard = tmp_path / "shard-00001.safetensors"
+        shard = tmp_path / "shard-00001-of-00002.safetensors"
         size = shard.stat().st_size
         with open(shard, "r+b") as f:
             f.truncate(size - 10)
@@ -51,7 +37,7 @@ class TestShardIntegrity:
         """DetectLevel.BASIC (default) doesn't catch truncation -- that's the point
         (walker doesn't need this expense per dir)."""
         _make_sharded(tmp_path)
-        shard = tmp_path / "shard-00001.safetensors"
+        shard = tmp_path / "shard-00001-of-00002.safetensors"
         size = shard.stat().st_size
         with open(shard, "r+b") as f:
             f.truncate(size - 10)

@@ -18,6 +18,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from rich.console import Console
+
+from hfutils.io.progress import make_progress
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -124,11 +128,7 @@ class RichObserver:
     Lives here (not in commands/convert) so library consumers can opt into
     the rich rendering without importing from the CLI module."""
 
-    def __init__(self, console=None) -> None:
-        from rich.console import Console
-
-        from hfutils.io.progress import make_progress
-
+    def __init__(self, console: Console | None = None) -> None:
         self._console = console if console is not None else Console()
         self._progress = make_progress(self._console)
         self._overall_task: int | None = None
@@ -162,23 +162,28 @@ class RichObserver:
         self._progress.__exit__(None, None, None)
 
 
+class _PerOpMergeAdapter:
+    """Wraps a plan-scope Observer so it looks like a merge-scope MergeObserver
+    for one op. Runner already issued `on_op_start` with a stat-based total,
+    so the refined `on_total` from stream_merge is intentionally dropped."""
+
+    def __init__(self, observer: Observer, op: "PackOp") -> None:
+        self._observer = observer
+        self._op = op
+
+    def on_total(self, total_bytes: int) -> None:
+        return
+
+    def on_progress(self, bytes_copied: int) -> None:
+        self._observer.on_op_progress(self._op, bytes_copied)
+
+    def on_warning(self, message: str) -> None:
+        self._observer.on_op_warning(self._op, message)
+
+
 def per_op_merge_observer(observer: Observer, op: "PackOp") -> MergeObserver:
     """Adapt a plan-scope Observer into a merge-scope MergeObserver for one op.
 
     PlanRunner uses this to hand `stream_merge` an observer that forwards
-    progress and warnings (tagged with the op) up to the plan-level
-    observer. The runner fires `on_op_start` itself with a stat-based total,
-    so `on_total` from stream_merge is intentionally ignored here."""
-
-    class _Adapter:
-        def on_total(self, total_bytes: int) -> None:
-            # Runner already issued on_op_start; ignore the refined merge total.
-            return
-
-        def on_progress(self, bytes_copied: int) -> None:
-            observer.on_op_progress(op, bytes_copied)
-
-        def on_warning(self, message: str) -> None:
-            observer.on_op_warning(op, message)
-
-    return _Adapter()
+    progress and warnings tagged with the op."""
+    return _PerOpMergeAdapter(observer, op)

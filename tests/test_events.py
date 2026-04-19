@@ -12,7 +12,6 @@ from hfutils.events import (
     MergeObserver,
     NullMergeObserver,
     NullObserver,
-    Observer,
     per_op_merge_observer,
 )
 from hfutils.formats.safetensors import stream_merge

@@ -1,6 +1,6 @@
-"""Source variants.
+"""Source variants: a discriminated union over model layouts on disk.
 
-The `Source` union replaces the v0.6 god-dataclass. Every consumer does
+Every consumer does
 
     match source:
         case PipelineSource(components=c) if c: ...
@@ -10,12 +10,10 @@ The `Source` union replaces the v0.6 god-dataclass. Every consumer does
         case PytorchDirSource(files=fs): ...
         case UnknownSource(): ...
 
-which lets the type checker reject `components` on a gguf file, etc.
-
-`EnrichedView` is the extra data that a single-target inspect needs: config
-(JSON), safetensors headers, gguf info, total file size. It's a separate
-value object so the core source types stay cheap to construct during a
-recursive walk; callers pay for `enrich(source)` only when they want the view.
+`EnrichedView` carries the extra data (config JSON, headers, gguf info,
+sizes) that single-target inspect needs. It's a separate value object so
+the union stays cheap to construct during a recursive walk; callers pay
+for `enrich(source)` only when they want the view.
 """
 
 from __future__ import annotations
@@ -140,6 +138,3 @@ def display_kind(source: Source) -> str:
             return "unknown"
 
 
-def source_path(source: Source) -> Path:
-    """Every variant has `.path`; this helper avoids `match src: case X: return src.path` boilerplate."""
-    return source.path
