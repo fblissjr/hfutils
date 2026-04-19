@@ -113,4 +113,6 @@ class TestStreamMerge:
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
 
-        assert peak < 16 * 1024 * 1024, f"peak Python allocation was {peak / 1024 / 1024:.1f} MiB"
+        # Observed peak is ~8 MiB (4 MiB read chunk + 4 MiB write buffer).
+        # 10 MiB gives 25% headroom; still way under the 16 MiB loose threshold.
+        assert peak < 10 * 1024 * 1024, f"peak Python allocation was {peak / 1024 / 1024:.1f} MiB"

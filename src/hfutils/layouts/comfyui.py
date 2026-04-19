@@ -77,9 +77,13 @@ def _target_dest(target: str, comfyui_root: Path, name: str) -> Path:
     return comfyui_root / TARGET_FOLDERS[target] / f"{name}.safetensors"
 
 
-def _plan_component(source: Source, component: str, comfyui_root: Path, name: str) -> PackOp:
+def _plan_component(source: Source, component: str, comfyui_root: Path, name: str) -> PackOp | None:
+    """Returns None if the component subdir has no safetensors (e.g. legacy
+    .bin-only components in a mixed pipeline). Callers filter None out."""
     subdir = source.path / component
     shards = sorted(subdir.glob("*.safetensors"))
+    if not shards:
+        return None
     return PackOp(
         label=component,
         source=subdir,
@@ -113,7 +117,9 @@ def plan_pack(
                 continue
             if skip and component in skip:
                 continue
-            ops.append(_plan_component(source, component, comfyui_root, name))
+            op = _plan_component(source, component, comfyui_root, name)
+            if op is not None:
+                ops.append(op)
         return ops
 
     if source.kind in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
