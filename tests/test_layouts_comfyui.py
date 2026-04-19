@@ -10,6 +10,7 @@ from safetensors.torch import save_file
 from hfutils.errors import PlanError
 from hfutils.layouts.comfyui import (
     TARGET_FOLDERS,
+    ConvertTarget,
     PackOp,
     plan_pack,
 )
@@ -66,7 +67,7 @@ class TestPlanPack:
         save_file({"w": torch.randn(2, 2)}, f)
         src = detect_source(f)
 
-        plan = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
+        plan = plan_pack(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
         assert len(plan) == 1
         assert plan.ops[0].dest == tmp_path / "c" / "diffusion_models/X.safetensors"
         assert plan.ops[0].kind == "copy"
@@ -84,7 +85,7 @@ class TestPlanPack:
         }))
         src = detect_source(tmp_path)
 
-        plan = plan_pack(src, tmp_path / "c", name="X", target="diffusion_model")
+        plan = plan_pack(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
         assert len(plan) == 1
         assert plan.ops[0].kind == "merge"
 

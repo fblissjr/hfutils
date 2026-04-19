@@ -68,3 +68,25 @@ class TestPlanRunner:
         plan = plan_single(detect_source(src), out)
         PlanRunner().run(plan)
         assert out.exists()
+
+    def test_on_plan_complete_called_on_exception(self, tmp_path):
+        """If an op raises partway through, on_plan_complete must still fire so
+        observers holding resources (rich Progress, open files, etc.) can
+        tear down cleanly."""
+        src = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(2, 2)}, src)
+        plan = plan_single(detect_source(src), tmp_path / "out.safetensors")
+
+        class ExplodingObserver(CollectingObserver):
+            def on_op_start(self, op, total_bytes):
+                super().on_op_start(op, total_bytes)
+                raise RuntimeError("boom")
+
+        exploder = ExplodingObserver()
+        try:
+            PlanRunner(observer=exploder).run(plan)
+        except RuntimeError:
+            pass
+
+        assert exploder.plans_started == [plan]
+        assert len(exploder.plans_completed) == 1

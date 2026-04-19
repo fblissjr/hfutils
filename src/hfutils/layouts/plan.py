@@ -15,16 +15,14 @@ from hfutils.sources.types import Source
 class PackPlan:
     ops: list[PackOp]
     source: Source
-    total_bytes: int = 0
     # Free-form metadata the planner can stash (e.g. target=`comfyui`, `single`).
     meta: dict[str, str] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        if self.total_bytes == 0:
-            self.total_bytes = sum(
-                sum(s.stat().st_size for s in op.shards)
-                for op in self.ops
-            )
+    @property
+    def total_bytes(self) -> int:
+        """Sum of op byte totals. Each op caches its own total, so validate()-only
+        callers don't pay for stats they don't need."""
+        return sum(op.total_bytes for op in self.ops)
 
     def validate(self) -> list[str]:
         """Return a list of human-readable problems with this plan.

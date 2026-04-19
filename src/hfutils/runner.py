@@ -12,16 +12,8 @@ from hfutils.formats.safetensors import (
     manifest_from_shards,
     stream_merge,
 )
-from hfutils.io.progress import COPY_CHUNK
-from hfutils.layouts.comfyui import PackOp
+from hfutils.io.progress import copy_chunks
 from hfutils.layouts.plan import PackPlan
-
-
-def _op_total_bytes(op: PackOp) -> int:
-    """Stat-based byte total per op. Overcounts merge output by each shard's
-    header (tens of KB) -- fine for progress sizing and for preflight (safe
-    bias toward 'not enough space')."""
-    return sum(s.stat().st_size for s in op.shards)
 
 
 class PlanRunner:
@@ -40,33 +32,34 @@ class PlanRunner:
 
     def run(self, plan: PackPlan) -> dict[Path, Manifest]:
         """Execute every op, return {dest: Manifest}. Raises StreamMergeError
-        / OSError / etc. on failure -- caller handles user-facing messaging."""
+        / OSError / etc. on failure -- caller handles user-facing messaging.
+
+        `on_plan_complete` is invoked in a finally, so observers that hold
+        resources (e.g. RichObserver owns a rich Progress context) tear down
+        cleanly even if an op raises partway through."""
         self.observer.on_plan_start(plan)
-
         manifests: dict[Path, Manifest] = {}
-        for op in plan.ops:
-            op.dest.parent.mkdir(parents=True, exist_ok=True)
-            total = _op_total_bytes(op)
-            self.observer.on_op_start(op, total)
+        try:
+            for op in plan.ops:
+                op.dest.parent.mkdir(parents=True, exist_ok=True)
+                self.observer.on_op_start(op, op.total_bytes)
 
-            if op.kind == "copy":
-                src = op.shards[0]
-                with open(src, "rb") as fi, open(op.dest, "wb") as fo:
-                    while True:
-                        chunk = fi.read(COPY_CHUNK)
-                        if not chunk:
-                            break
-                        fo.write(chunk)
-                        self.observer.on_op_progress(op, len(chunk))
-                manifest = manifest_from_shards([src])
-            else:
-                manifest = stream_merge(
-                    op.shards, op.dest,
-                    observer=per_op_merge_observer(self.observer, op),
-                )
+                if op.kind == "copy":
+                    src = op.shards[0]
+                    copy_chunks(
+                        src, op.dest,
+                        on_chunk=lambda n, op=op: self.observer.on_op_progress(op, n),
+                    )
+                    manifest = manifest_from_shards([src])
+                else:
+                    manifest = stream_merge(
+                        op.shards, op.dest,
+                        observer=per_op_merge_observer(self.observer, op),
+                    )
 
-            manifests[op.dest] = manifest
-            self.observer.on_op_complete(op, manifest)
+                manifests[op.dest] = manifest
+                self.observer.on_op_complete(op, manifest)
+        finally:
+            self.observer.on_plan_complete(plan, manifests)
 
-        self.observer.on_plan_complete(plan, manifests)
         return manifests

@@ -55,16 +55,11 @@ def _error(msg: str) -> None:
     console.print(f"[red]Error:[/red] {msg}")
 
 
-def _op_total_bytes(op: PackOp) -> int:
-    """Stat-based byte total per op. Safe bias for preflight."""
-    return sum(s.stat().st_size for s in op.shards)
-
-
 def _preflight_space(ops: list[PackOp]) -> None:
     """Refuse to start if any destination filesystem lacks space."""
     by_root: dict[Path, int] = defaultdict(int)
     for op in ops:
-        by_root[op.dest.parent] += _op_total_bytes(op)
+        by_root[op.dest.parent] += op.total_bytes
     for root, required in by_root.items():
         try:
             check_free_space(root, required)
@@ -126,11 +121,10 @@ def _plan_comfyui_from_cli(
 ) -> PackPlan:
     _require_option(root, "--root", "comfyui")
     resolved_name = name or _default_name(src)
-    target_value = target.value if target is not None else None
     try:
         return plan_comfyui(
             src, root, resolved_name,  # type: ignore[arg-type]  # root is narrowed above
-            only=only or None, skip=skip or None, target=target_value,
+            only=only or None, skip=skip or None, target=target,
         )
     except PlanError as e:
         _error(str(e))

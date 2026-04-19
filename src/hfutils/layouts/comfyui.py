@@ -10,6 +10,7 @@ No filesystem writes happen here.
 
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
@@ -32,17 +33,6 @@ DIFFUSERS_COMPONENTS: dict[str, tuple[str, str]] = {
     "text_encoder_3": ("text_encoders",    "_te3"),
 }
 
-# User-supplied --as target -> ComfyUI subfolder.
-TARGET_FOLDERS: dict[str, str] = {
-    "diffusion_model": "diffusion_models",
-    "checkpoint":      "checkpoints",
-    "vae":             "vae",
-    "text_encoder":    "text_encoders",
-    "clip":            "text_encoders",
-    "lora":            "loras",
-}
-
-
 class ConvertTarget(str, Enum):
     """CLI-facing values for --as. Source of truth for typer validation."""
     DIFFUSION_MODEL = "diffusion_model"
@@ -51,6 +41,17 @@ class ConvertTarget(str, Enum):
     TEXT_ENCODER = "text_encoder"
     CLIP = "clip"
     LORA = "lora"
+
+
+# Which ComfyUI subfolder each ConvertTarget maps to.
+TARGET_FOLDERS: dict[ConvertTarget, str] = {
+    ConvertTarget.DIFFUSION_MODEL: "diffusion_models",
+    ConvertTarget.CHECKPOINT:      "checkpoints",
+    ConvertTarget.VAE:             "vae",
+    ConvertTarget.TEXT_ENCODER:    "text_encoders",
+    ConvertTarget.CLIP:            "text_encoders",
+    ConvertTarget.LORA:            "loras",
+}
 
 
 OpKind = Literal["copy", "merge"]
@@ -67,18 +68,28 @@ class PackOp:
     def kind(self) -> OpKind:
         return "copy" if len(self.shards) == 1 else "merge"
 
+    @cached_property
+    def total_bytes(self) -> int:
+        """Sum of shard file sizes. Stat-based, cached on first access.
+
+        Slightly overcounts merge output by each shard's header overhead
+        (tens of KB) -- a safe bias for preflight and fine for progress
+        bar sizing. Single source of truth; used by PackPlan.total_bytes,
+        preflight, and the progress runner."""
+        return sum(s.stat().st_size for s in self.shards)
+
 
 def _component_dest(component: str, comfyui_root: Path, name: str) -> Path:
     folder, suffix = DIFFUSERS_COMPONENTS[component]
     return comfyui_root / folder / f"{name}{suffix}.safetensors"
 
 
-def _target_dest(target: str, comfyui_root: Path, name: str) -> Path:
-    if target not in TARGET_FOLDERS:
-        raise PlanError(
-            f"Unknown --as target '{target}'. Valid: {', '.join(sorted(TARGET_FOLDERS))}"
-        )
-    return comfyui_root / TARGET_FOLDERS[target] / f"{name}.safetensors"
+def _target_dest(target: ConvertTarget, comfyui_root: Path, name: str) -> Path:
+    folder = TARGET_FOLDERS.get(target)
+    if folder is None:
+        valid = ", ".join(t.value for t in TARGET_FOLDERS)
+        raise PlanError(f"Unknown --as target '{target}'. Valid: {valid}")
+    return comfyui_root / folder / f"{name}.safetensors"
 
 
 def _plan_component(
@@ -105,7 +116,7 @@ def plan_comfyui(
     *,
     only: list[str] | None = None,
     skip: list[str] | None = None,
-    target: str | None = None,
+    target: ConvertTarget | None = None,
 ) -> "PackPlan":
     """Build a PackPlan to pack `source` into `comfyui_root`.
 
@@ -133,7 +144,7 @@ def plan_comfyui(
 
         case ComponentSource(path=p, shards=shards):
             if target is None:
-                valid = ", ".join(sorted(TARGET_FOLDERS))
+                valid = ", ".join(t.value for t in TARGET_FOLDERS)
                 raise PlanError(
                     f"Source is a component directory; specify destination with --as ({valid})"
                 )
@@ -148,7 +159,7 @@ def plan_comfyui(
 
         case SafetensorsFileSource(path=p):
             if target is None:
-                valid = ", ".join(sorted(TARGET_FOLDERS))
+                valid = ", ".join(t.value for t in TARGET_FOLDERS)
                 raise PlanError(
                     f"Source is a single file; specify destination with --as ({valid})"
                 )
