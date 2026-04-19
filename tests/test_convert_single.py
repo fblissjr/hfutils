@@ -54,7 +54,7 @@ class TestConvertSingle:
         merged = load_file(str(out))
         assert torch.equal(merged["w"], tensors["w"])
 
-    def test_rejects_pipeline_source(self, tmp_path):
+    def test_pipeline_source_without_component_errors(self, tmp_path):
         (tmp_path / "model_index.json").write_bytes(orjson.dumps({"_class_name": "P"}))
         (tmp_path / "transformer").mkdir()
         save_file({"w": torch.randn(2, 2)}, tmp_path / "transformer/model.safetensors")
@@ -62,7 +62,7 @@ class TestConvertSingle:
 
         result = runner.invoke(app, ["convert", "single", str(tmp_path), str(out)])
         assert result.exit_code != 0
-        assert "convert comfyui" in result.output
+        assert "--component" in result.output
 
     def test_dry_run_writes_nothing(self, tmp_path):
         src_dir = tmp_path / "sharded"
@@ -79,3 +79,63 @@ class TestConvertSingle:
             "convert", "single", str(tmp_path / "nope"), str(tmp_path / "out.safetensors"),
         ])
         assert result.exit_code != 0
+
+
+class TestConvertSingleComponent:
+    def _make_pipeline(self, tmp: Path) -> None:
+        (tmp / "model_index.json").write_bytes(orjson.dumps({
+            "_class_name": "P",
+            "transformer": ["diffusers", "T"],
+            "vae": ["diffusers", "V"],
+        }))
+        (tmp / "transformer").mkdir()
+        _make_sharded(tmp / "transformer")
+        (tmp / "vae").mkdir()
+        save_file({"w": torch.randn(2, 2)}, tmp / "vae/diffusion_pytorch_model.safetensors")
+
+    def test_picks_component_from_pipeline(self, tmp_path):
+        self._make_pipeline(tmp_path)
+        out = tmp_path / "out.safetensors"
+
+        result = runner.invoke(app, [
+            "convert", "single", str(tmp_path), str(out),
+            "--component", "transformer",
+        ])
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        merged = load_file(str(out))
+        assert set(merged.keys()) == {"a.weight", "a.bias", "b.weight", "b.bias"}
+
+    def test_pipeline_without_component_errors_and_lists_available(self, tmp_path):
+        self._make_pipeline(tmp_path)
+        out = tmp_path / "out.safetensors"
+
+        result = runner.invoke(app, [
+            "convert", "single", str(tmp_path), str(out),
+        ])
+        assert result.exit_code != 0
+        assert "--component" in result.output
+        assert "transformer" in result.output
+        assert "vae" in result.output
+
+    def test_unknown_component_errors(self, tmp_path):
+        self._make_pipeline(tmp_path)
+        out = tmp_path / "out.safetensors"
+
+        result = runner.invoke(app, [
+            "convert", "single", str(tmp_path), str(out),
+            "--component", "bogus",
+        ])
+        assert result.exit_code != 0
+        assert "bogus" in result.output
+
+    def test_component_on_non_pipeline_errors(self, tmp_path):
+        src = tmp_path / "flat.safetensors"
+        save_file({"w": torch.randn(2, 2)}, src)
+
+        result = runner.invoke(app, [
+            "convert", "single", str(src), str(tmp_path / "out.safetensors"),
+            "--component", "transformer",
+        ])
+        assert result.exit_code != 0
+        assert "pipeline" in result.output.lower()

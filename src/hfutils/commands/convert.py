@@ -204,8 +204,12 @@ def _single_as_packop(src: Source, output: Path) -> PackOp:
 
 @convert_app.command("single")
 def single_cmd(
-    source: Path = typer.Argument(..., help="Sharded component directory or single .safetensors file"),
+    source: Path = typer.Argument(..., help="Sharded component dir, single .safetensors file, or diffusers pipeline (use --component)"),
     output: Path = typer.Argument(..., help="Output .safetensors file"),
+    component: str | None = typer.Option(
+        None, "--component",
+        help="When source is a diffusers pipeline: pick one component (transformer, vae, text_encoder, ...)",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
     verify: bool = typer.Option(False, "--verify", help="Re-read the output and confirm tensor names/dtypes/shapes match the plan"),
 ) -> None:
@@ -214,12 +218,35 @@ def single_cmd(
     if src.kind == SourceKind.UNKNOWN:
         console.print(f"[red]Error:[/red] unrecognized source: {source}")
         raise typer.Exit(1)
-    if src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
+
+    if src.kind == SourceKind.DIFFUSERS_PIPELINE:
+        if component is None:
+            available = ", ".join(src.components) or "(none detected)"
+            console.print(
+                f"[red]Error:[/red] source is a diffusers pipeline; "
+                f"pass --component to pick one. Available: {available}"
+            )
+            raise typer.Exit(1)
+        if component not in src.components:
+            available = ", ".join(src.components) or "(none detected)"
+            console.print(
+                f"[red]Error:[/red] component '{component}' not found in pipeline. "
+                f"Available: {available}"
+            )
+            raise typer.Exit(1)
+        src = detect_source(source / component)
+        if src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
+            console.print(f"[red]Error:[/red] component '{component}' has no safetensors to merge.")
+            raise typer.Exit(1)
+    elif src.kind not in (SourceKind.COMPONENT_DIR, SourceKind.SAFETENSORS_FILE):
         console.print(
-            f"[red]Error:[/red] `convert single` expects a component directory or "
-            f"a single .safetensors file; got {src.kind.value}. "
-            f"For a diffusers pipeline, use `convert comfyui` or (upcoming) --component."
+            f"[red]Error:[/red] `convert single` expects a component directory, a "
+            f"single .safetensors file, or a diffusers pipeline (with --component); "
+            f"got {src.kind.value}."
         )
+        raise typer.Exit(1)
+    elif component is not None:
+        console.print("[red]Error:[/red] --component only applies when source is a diffusers pipeline.")
         raise typer.Exit(1)
 
     op = _single_as_packop(src, output)
