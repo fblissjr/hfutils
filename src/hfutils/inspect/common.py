@@ -42,6 +42,15 @@ DTYPE_SIZES: dict[str, float] = {
 }
 
 
+# Sub-fp16 dtypes used for quantized weights -> user-facing label
+QUANT_DTYPE_LABELS: dict[str, str] = {
+    "F8_E4M3": "fp8_e4m3",
+    "F8_E5M2": "fp8_e5m2",
+    "I8": "int8",
+    "U8": "uint8",
+}
+
+
 @dataclass
 class TensorInfo:
     name: str

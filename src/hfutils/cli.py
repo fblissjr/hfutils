@@ -12,8 +12,10 @@ app = typer.Typer(
 def _register_commands() -> None:
     from hfutils.commands import inspect_cmd, merge, scan  # noqa: F401
     from hfutils.commands.civitai import civitai_app
+    from hfutils.commands.comfyui import comfyui_app
 
     app.add_typer(civitai_app, name="civitai")
+    app.add_typer(comfyui_app, name="comfyui")
 
 
 _register_commands()

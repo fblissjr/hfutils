@@ -44,10 +44,10 @@ def inspect_directory(path: Path) -> DirectoryInfo:
             info.model_files.append(f)
             info.total_file_size += f.stat().st_size
 
-    # Check for sharding
-    index_path = path / "model.safetensors.index.json"
-    if index_path.exists():
-        index = orjson.loads(index_path.read_bytes())
+    # Check for sharding (diffusers uses diffusion_pytorch_model.*, transformers uses model.*)
+    index_candidates = sorted(path.glob("*.safetensors.index.json"))
+    if index_candidates:
+        index = orjson.loads(index_candidates[0].read_bytes())
         shard_files = set(index.get("weight_map", {}).values())
         info.sharded = True
         info.shard_count = len(shard_files)

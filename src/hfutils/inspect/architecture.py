@@ -134,3 +134,16 @@ def detect_architecture(
         adapter_type=_detect_adapter(tensor_names),
         training_metadata=_extract_training_metadata(metadata) if metadata else None,
     )
+
+
+def architecture_name_from_config(config: dict | None) -> str | None:
+    """Extract a model class name from a diffusers/transformers config dict."""
+    if not config:
+        return None
+    class_name = config.get("_class_name")
+    if isinstance(class_name, str):
+        return class_name
+    archs = config.get("architectures")
+    if isinstance(archs, list) and archs:
+        return str(archs[0])
+    return None
