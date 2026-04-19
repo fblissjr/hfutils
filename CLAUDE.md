@@ -60,9 +60,12 @@ tests/                    -- 171 tests, pytest (includes Hypothesis property tes
 
 - `uv sync && uv run pytest` -- install + test
 - `uv run hfutils --help` -- verify CLI
+- `uv add --dev <pkg>` for test/dev deps (hypothesis, pytest plugins, etc.). Bare `uv add` goes to runtime.
 - TDD: failing test first, then implement
 - CLI tests use `typer.testing.CliRunner`: `runner.invoke(app, ["convert", str(src), "--to", "single", "--out", str(out)])`. See `tests/test_convert.py`.
 - Shared test fixtures: `make_sharded_component()` and `make_diffusers_pipeline()` live in `tests/conftest.py`. Don't re-roll local copies.
+- Property-based tests use Hypothesis: `@given(...) + @settings(max_examples=N, deadline=None)`, `@st.composite` for nested draws. See `tests/test_stream_merge_properties.py`.
+- Observer tests: use `CollectingObserver` / `CollectingMergeObserver` from `hfutils.events` to capture lifecycle events for assertions.
 
 ## Dependencies
 
@@ -93,6 +96,8 @@ tests/                    -- 171 tests, pytest (includes Hypothesis property tes
 ## Gotchas
 
 - Pyright "Import X could not be resolved" warnings in tool output are noise -- the language server isn't wired to the uv venv. Ignore unless the import is actually wrong.
+- `git commit -m "..."` with raw backticks inside the message: bash runs them as command substitution and silently drops the word. Use HEREDOC (`-m "$(cat <<'EOF' ... EOF)"`) for any message containing backticks.
+- SSH signing occasionally flakes with "communication with agent failed" even when `ssh-add -l` shows the key. Retry the commit; do not bypass with `--no-gpg-sign`.
 - Do NOT add HF download/search/info commands -- `hf` CLI handles those.
 - Use `typer` (full package), NOT `typer-slim` -- typer-slim doesn't provide the `typer` import.
 - GGUF parser is hand-rolled (struct.unpack) -- the gguf library memmaps entire files including tensor data.
