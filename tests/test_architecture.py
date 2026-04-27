@@ -1,6 +1,8 @@
 """Tests for architecture detection from tensor names."""
 
-from hfutils.inspect.architecture import detect_architecture
+import orjson
+
+from hfutils.inspect.architecture import detect_architecture, extract_likely_triggers
 
 
 class TestDetectDiffusionModels:
@@ -141,3 +143,42 @@ class TestMetadataParsing:
         result = detect_architecture(names, metadata=metadata)
         assert result.training_metadata is not None
         assert "sd_v1" in result.training_metadata.get("base_model", "")
+
+
+class TestLikelyTriggers:
+    def test_returns_top_tokens_aggregated_across_datasets(self):
+        # kohya stores ss_tag_frequency as a stringified JSON of
+        # {dataset_name: {tag: count}}.
+        freq = {
+            "img_a": {"mychar": 30, "smiling": 15, "1girl": 12},
+            "img_b": {"mychar": 20, "1girl": 18, "outdoors": 5},
+        }
+        metadata = {"ss_tag_frequency": orjson.dumps(freq).decode()}
+        triggers = extract_likely_triggers(metadata, top=3)
+        # mychar: 50, 1girl: 30, smiling: 15
+        assert triggers == ["mychar", "1girl", "smiling"]
+
+    def test_handles_flat_mapping(self):
+        # Some trainers write a flat {tag: count} dict instead of nested.
+        freq = {"trigger_word": 42, "background": 10}
+        metadata = {"ss_tag_frequency": orjson.dumps(freq).decode()}
+        triggers = extract_likely_triggers(metadata)
+        assert triggers[0] == "trigger_word"
+
+    def test_returns_none_when_absent(self):
+        assert extract_likely_triggers({}) is None
+        assert extract_likely_triggers({"ss_network_module": "x"}) is None
+
+    def test_returns_none_on_malformed_json(self):
+        assert extract_likely_triggers({"ss_tag_frequency": "not-json"}) is None
+
+    def test_strips_blank_tokens(self):
+        freq = {"d": {"good": 5, "": 100, "  ": 50}}
+        metadata = {"ss_tag_frequency": orjson.dumps(freq).decode()}
+        assert extract_likely_triggers(metadata) == ["good"]
+
+    def test_detect_architecture_exposes_triggers(self):
+        freq = {"d": {"my_trigger": 99, "other": 1}}
+        metadata = {"ss_tag_frequency": orjson.dumps(freq).decode()}
+        result = detect_architecture(["weight"], metadata=metadata)
+        assert result.likely_triggers == ["my_trigger", "other"]

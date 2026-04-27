@@ -18,6 +18,11 @@ class DownloadInfo:
     size_bytes: int
     model_name: str
     version_name: str
+    model_id: int
+    version_id: int
+    trained_words: list[str]
+    base_model: str | None = None
+    description: str | None = None
 
 
 def primary_file(files: list[dict]) -> dict | None:
@@ -74,6 +79,11 @@ class CivitaiClient:
             size_bytes=int(primary.get("sizeKB", 0)) * 1024,
             model_name=model["name"],
             version_name=version["name"],
+            model_id=int(model["id"]),
+            version_id=int(version["id"]),
+            trained_words=list(version.get("trainedWords") or []),
+            base_model=version.get("baseModel"),
+            description=model.get("description"),
         )
 
 

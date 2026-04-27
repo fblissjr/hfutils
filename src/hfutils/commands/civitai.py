@@ -2,11 +2,12 @@
 
 from pathlib import Path
 
+import orjson
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from hfutils.providers.civitai import CivitaiClient, parse_model_ref, primary_file
+from hfutils.providers.civitai import CivitaiClient, DownloadInfo, parse_model_ref, primary_file
 from hfutils.providers.download import download_file
 from hfutils.inspect.common import format_size
 
@@ -118,3 +119,22 @@ def dl(
         raise typer.Abort()
 
     download_file(dl_info.url, dest, total_size=dl_info.size_bytes, headers=client.auth_headers)
+    _write_sidecar(dl_info, dest)
+
+
+def _write_sidecar(info: DownloadInfo, dest: Path) -> None:
+    """Write a <file>.civitai.json sidecar with usage metadata next to the download."""
+    sidecar = dest.with_name(dest.name + ".civitai.json")
+    payload = {
+        "model_id": info.model_id,
+        "version_id": info.version_id,
+        "model_name": info.model_name,
+        "version_name": info.version_name,
+        "base_model": info.base_model,
+        "trained_words": info.trained_words,
+        "description": info.description,
+    }
+    sidecar.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+    if info.trained_words:
+        console.print(f"  Triggers: {', '.join(info.trained_words)}")
+    console.print(f"  Sidecar:  {sidecar}")

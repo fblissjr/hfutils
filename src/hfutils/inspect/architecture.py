@@ -6,7 +6,10 @@ specific patterns before more general ones).
 """
 
 import re
+from collections import Counter
 from dataclasses import dataclass
+
+import orjson
 
 
 @dataclass
@@ -14,6 +17,7 @@ class ArchitectureInfo:
     family: str = "Unknown"
     adapter_type: str | None = None
     training_metadata: dict[str, str] | None = None
+    likely_triggers: list[str] | None = None
 
 
 # Each rule: (family_name, list_of_required_conditions)
@@ -139,6 +143,39 @@ def _extract_training_metadata(metadata: dict[str, str]) -> dict[str, str] | Non
     return result if result else None
 
 
+def extract_likely_triggers(metadata: dict[str, str], top: int = 10) -> list[str] | None:
+    """Heuristically extract trigger words from kohya-style ``ss_tag_frequency``.
+
+    Kohya stores caption tag counts as a stringified JSON. Shape is usually
+    ``{dataset_name: {tag: count, ...}, ...}`` but some trainers write a flat
+    ``{tag: count}``. Counts are summed across datasets and the top-N tags
+    are returned. The result is a heuristic, not an explicit "trigger" field.
+    """
+    raw = metadata.get("ss_tag_frequency")
+    if not raw:
+        return None
+    try:
+        parsed = orjson.loads(raw)
+    except orjson.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+
+    first = next(iter(parsed.values()))
+    sources = parsed.values() if isinstance(first, dict) else [parsed]
+
+    counts: Counter[str] = Counter()
+    for per_dataset in sources:
+        if not isinstance(per_dataset, dict):
+            continue
+        for tag, count in per_dataset.items():
+            if isinstance(count, (int, float)):
+                counts[tag] += int(count)
+
+    ordered = [tag.strip() for tag, _ in counts.most_common() if tag and tag.strip()]
+    return ordered[:top] if ordered else None
+
+
 def detect_architecture(
     tensor_names: list[str],
     metadata: dict[str, str] | None = None,
@@ -148,6 +185,7 @@ def detect_architecture(
         family=_detect_family(tensor_names),
         adapter_type=_detect_adapter(tensor_names),
         training_metadata=_extract_training_metadata(metadata) if metadata else None,
+        likely_triggers=extract_likely_triggers(metadata) if metadata else None,
     )
 
 

@@ -73,6 +73,10 @@ def display_safetensors(header: SafetensorsHeader, path: Path, detail: bool, con
         for k, v in arch.training_metadata.items():
             console.print(f"    {k}: {v}")
 
+    if arch.likely_triggers:
+        console.print("\n  [bold]Likely triggers[/bold] [dim](heuristic, top tags from training captions):[/dim]")
+        console.print(f"    {', '.join(arch.likely_triggers)}")
+
     if detail:
         table = Table(title="Tensors", show_lines=False)
         table.add_column("Name", style="cyan")
