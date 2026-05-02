@@ -10,6 +10,8 @@ import orjson
 
 from hfutils.providers.download import DEFAULT_HEADERS
 
+DEFAULT_HOST = "civitai.com"
+
 
 @dataclass
 class DownloadInfo:
@@ -25,16 +27,28 @@ class DownloadInfo:
     description: str | None = None
 
 
+@dataclass
+class ModelRef:
+    """Parsed reference to a CivitAI model, optionally with a specific version and host."""
+
+    model_id: int
+    version_id: int | None = None
+    host: str = DEFAULT_HOST
+
+
 def primary_file(files: list[dict]) -> dict | None:
     """Select the primary file from a CivitAI version's file list."""
     return next((f for f in files if f.get("primary")), files[0] if files else None)
 
 
 class CivitaiClient:
-    BASE_URL = "https://civitai.com/api/v1"
-
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, host: str | None = None):
         self.api_key = api_key or os.environ.get("CIVITAI_API_KEY", "")
+        self.host = host or os.environ.get("CIVITAI_HOST", DEFAULT_HOST)
+
+    @property
+    def base_url(self) -> str:
+        return f"https://{self.host}/api/v1"
 
     @property
     def auth_headers(self) -> dict[str, str]:
@@ -43,7 +57,7 @@ class CivitaiClient:
         return {}
 
     def _request(self, endpoint: str, params: dict[str, str] | None = None) -> dict:
-        url = f"{self.BASE_URL}/{endpoint}"
+        url = f"{self.base_url}/{endpoint}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
 
@@ -59,15 +73,28 @@ class CivitaiClient:
     def get_model(self, model_id: int) -> dict:
         return self._request(f"models/{model_id}")
 
-    def resolve_download(self, model_id: int, version_idx: int = 0) -> DownloadInfo:
-        """Get download info for a model. version_idx selects which version (0 = latest)."""
+    def resolve_download(
+        self,
+        model_id: int,
+        *,
+        version_id: int | None = None,
+    ) -> DownloadInfo:
+        """Get download info for a model. If `version_id` is None, the latest version is used."""
         model = self.get_model(model_id)
         versions = model.get("modelVersions", [])
         if not versions:
             msg = f"No versions found for model {model_id}"
             raise ValueError(msg)
 
-        version = versions[version_idx]
+        if version_id is None:
+            version = versions[0]
+        else:
+            version = next((v for v in versions if v.get("id") == version_id), None)
+            if version is None:
+                available = ", ".join(str(v.get("id")) for v in versions)
+                msg = f"Version {version_id} not found for model {model_id}. Available: {available}"
+                raise ValueError(msg)
+
         primary = primary_file(version.get("files", []))
         if not primary:
             msg = f"No files found for version {version['name']}"
@@ -87,21 +114,34 @@ class CivitaiClient:
         )
 
 
-def parse_model_ref(target: str) -> int | None:
-    """Parse a model ID from various formats: numeric ID, AIR URN, or CivitAI URL."""
+_AIR_RE = re.compile(r"(?:^|:)civitai:(\d+)(?:@(\d+))?(?:$|[^\d])")
+_URL_RE = re.compile(r"(civitai\.(?:com|red))/models/(\d+)")
+_VERSION_QS_RE = re.compile(r"[?&]modelVersionId=(\d+)")
+
+
+def parse_model_ref(target: str) -> ModelRef | None:
+    """Parse a model reference from numeric ID, AIR URN, or CivitAI URL.
+
+    Supports civitai.com and civitai.red URLs, and AIR URNs of the form
+    `civitai:<modelId>` or `civitai:<modelId>@<versionId>` (also the full
+    `urn:air:<eco>:<type>:civitai:<modelId>@<versionId>` form).
+    """
     if not target:
         return None
     if target.isdigit():
-        return int(target)
+        return ModelRef(model_id=int(target))
 
-    # AIR URN: civitai:12345
-    match = re.search(r"civitai:(\d+)", target)
-    if match:
-        return int(match.group(1))
+    air = _AIR_RE.search(target)
+    if air:
+        ver = int(air.group(2)) if air.group(2) else None
+        return ModelRef(model_id=int(air.group(1)), version_id=ver)
 
-    # URL: https://civitai.com/models/12345/optional-slug
-    match = re.search(r"civitai\.com/models/(\d+)", target)
-    if match:
-        return int(match.group(1))
+    url = _URL_RE.search(target)
+    if url:
+        host = url.group(1)
+        model_id = int(url.group(2))
+        ver_match = _VERSION_QS_RE.search(target)
+        version_id = int(ver_match.group(1)) if ver_match else None
+        return ModelRef(model_id=model_id, version_id=version_id, host=host)
 
     return None

@@ -3,6 +3,7 @@
 from unittest.mock import patch, MagicMock
 
 import orjson
+import pytest
 from typer.testing import CliRunner
 
 from hfutils.cli import app
@@ -19,18 +20,60 @@ def _mock_response(data: dict) -> MagicMock:
     return resp
 
 
+def _ref(target: str):
+    ref = parse_model_ref(target)
+    assert ref is not None, f"expected parse to succeed for {target!r}"
+    return ref
+
+
 class TestParseModelRef:
     def test_numeric_id(self):
-        assert parse_model_ref("12345") == 12345
+        ref = _ref("12345")
+        assert ref.model_id == 12345
+        assert ref.version_id is None
+        assert ref.host == "civitai.com"
 
     def test_air_urn(self):
-        assert parse_model_ref("civitai:67890") == 67890
+        ref = _ref("civitai:67890")
+        assert ref.model_id == 67890
+        assert ref.version_id is None
+
+    def test_air_urn_with_version(self):
+        ref = _ref("civitai:67890@1234")
+        assert ref.model_id == 67890
+        assert ref.version_id == 1234
+
+    def test_air_urn_full_form_with_version(self):
+        ref = _ref("urn:air:flux:lora:civitai:67890@1234")
+        assert ref.model_id == 67890
+        assert ref.version_id == 1234
 
     def test_civitai_url(self):
-        assert parse_model_ref("https://civitai.com/models/12345/some-model-name") == 12345
+        ref = _ref("https://civitai.com/models/12345/some-model-name")
+        assert ref.model_id == 12345
+        assert ref.version_id is None
+        assert ref.host == "civitai.com"
 
     def test_civitai_url_with_version(self):
-        assert parse_model_ref("https://civitai.com/models/12345?modelVersionId=99") == 12345
+        ref = _ref("https://civitai.com/models/12345?modelVersionId=99")
+        assert ref.model_id == 12345
+        assert ref.version_id == 99
+
+    def test_civitai_url_with_slug_and_version(self):
+        ref = _ref("https://civitai.com/models/12345/my-lora?modelVersionId=99")
+        assert ref.model_id == 12345
+        assert ref.version_id == 99
+
+    def test_civitai_red_url(self):
+        ref = _ref("https://civitai.red/models/12345/some-name")
+        assert ref.model_id == 12345
+        assert ref.host == "civitai.red"
+
+    def test_civitai_red_url_with_version(self):
+        ref = _ref("https://civitai.red/models/12345?modelVersionId=99")
+        assert ref.model_id == 12345
+        assert ref.version_id == 99
+        assert ref.host == "civitai.red"
 
     def test_invalid_returns_none(self):
         assert parse_model_ref("not-a-model") is None
@@ -133,7 +176,7 @@ class TestCivitaiClient:
         assert info.base_model is None
         assert info.description is None
 
-    def test_resolve_download_specific_version(self):
+    def test_resolve_download_specific_version_by_id(self):
         model_data = {
             "id": 12345,
             "name": "Multi Version",
@@ -155,9 +198,29 @@ class TestCivitaiClient:
         client = CivitaiClient()
 
         with patch("urllib.request.urlopen", return_value=_mock_response(model_data)):
-            info = client.resolve_download(12345, version_idx=1)
+            info = client.resolve_download(12345, version_id=100)
 
         assert info.filename == "v1.safetensors"
+        assert info.version_id == 100
+
+    def test_resolve_download_unknown_version_id_raises(self):
+        model_data = {
+            "id": 12345,
+            "name": "Multi Version",
+            "modelVersions": [
+                {
+                    "id": 200,
+                    "name": "v2.0",
+                    "files": [{"name": "v2.safetensors", "sizeKB": 4096, "primary": True}],
+                    "downloadUrl": "https://civitai.com/api/download/models/200",
+                },
+            ],
+        }
+        client = CivitaiClient()
+
+        with patch("urllib.request.urlopen", return_value=_mock_response(model_data)):
+            with pytest.raises(ValueError, match="Version 999 not found"):
+                client.resolve_download(12345, version_id=999)
 
     def test_auth_header_sent(self):
         client = CivitaiClient(api_key="my-secret-key")
@@ -172,6 +235,23 @@ class TestCivitaiClient:
         with patch.dict("os.environ", {"CIVITAI_API_KEY": "env-key"}):
             client = CivitaiClient()
             assert client.api_key == "env-key"
+
+    def test_default_host_is_civitai_com(self):
+        client = CivitaiClient()
+        assert client.host == "civitai.com"
+        assert client.base_url == "https://civitai.com/api/v1"
+
+    def test_custom_host_civitai_red(self):
+        client = CivitaiClient(host="civitai.red")
+        assert client.host == "civitai.red"
+        assert client.base_url == "https://civitai.red/api/v1"
+
+    def test_red_host_used_in_request(self):
+        client = CivitaiClient(host="civitai.red")
+        with patch("urllib.request.urlopen", return_value=_mock_response({"items": []})) as mock_open:
+            client.search("test")
+        req = mock_open.call_args[0][0]
+        assert "civitai.red" in req.full_url
 
 
 class TestDlSidecar:
@@ -224,6 +304,88 @@ class TestDlSidecar:
         assert data["base_model"] == "Flux.1 D"
         assert data["trained_words"] == ["mychar", "1girl"]
         assert "mychar" in data["description"]
+
+    def _multi_version_data(self) -> dict:
+        return {
+            "id": 12345,
+            "name": "Multi LoRA",
+            "modelVersions": [
+                {
+                    "id": 200,
+                    "name": "v2.0",
+                    "files": [{"name": "v2.safetensors", "sizeKB": 1, "primary": True}],
+                    "downloadUrl": "https://civitai.com/api/download/models/200",
+                },
+                {
+                    "id": 100,
+                    "name": "v1.0",
+                    "files": [{"name": "v1.safetensors", "sizeKB": 1, "primary": True}],
+                    "downloadUrl": "https://civitai.com/api/download/models/100",
+                },
+            ],
+        }
+
+    def test_dl_version_flag_picks_specific_version(self, tmp_path):
+        runner = CliRunner()
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_response(self._multi_version_data()),
+        ), patch("hfutils.commands.civitai.download_file") as mock_dl:
+            mock_dl.side_effect = lambda url, dest, total_size, headers: dest.write_bytes(b"x")
+
+            result = runner.invoke(
+                app,
+                ["civitai", "dl", "12345", "--version", "100", "--output", str(tmp_path)],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "v1.safetensors").exists()
+        sidecar = tmp_path / "v1.safetensors.civitai.json"
+        assert orjson.loads(sidecar.read_bytes())["version_id"] == 100
+
+    def test_dl_uses_url_embedded_version(self, tmp_path):
+        runner = CliRunner()
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_response(self._multi_version_data()),
+        ), patch("hfutils.commands.civitai.download_file") as mock_dl:
+            mock_dl.side_effect = lambda url, dest, total_size, headers: dest.write_bytes(b"x")
+
+            result = runner.invoke(
+                app,
+                [
+                    "civitai", "dl",
+                    "https://civitai.com/models/12345?modelVersionId=100",
+                    "--output", str(tmp_path),
+                ],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "v1.safetensors").exists()
+
+    def test_dl_red_url_uses_red_host(self, tmp_path):
+        runner = CliRunner()
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_response(self._model_data()),
+        ) as mock_open, patch("hfutils.commands.civitai.download_file") as mock_dl:
+            mock_dl.side_effect = lambda url, dest, total_size, headers: dest.write_bytes(b"x")
+
+            result = runner.invoke(
+                app,
+                [
+                    "civitai", "dl",
+                    "https://civitai.red/models/12345/x",
+                    "--output", str(tmp_path),
+                ],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        api_call = mock_open.call_args_list[0][0][0]
+        assert "civitai.red" in api_call.full_url
 
     def test_no_sidecar_when_download_fails(self, tmp_path):
         runner = CliRunner()

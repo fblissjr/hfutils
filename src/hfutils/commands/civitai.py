@@ -7,7 +7,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from hfutils.providers.civitai import CivitaiClient, DownloadInfo, parse_model_ref, primary_file
+from hfutils.providers.civitai import (
+    CivitaiClient,
+    DownloadInfo,
+    ModelRef,
+    parse_model_ref,
+    primary_file,
+)
 from hfutils.providers.download import download_file
 from hfutils.inspect.common import format_size
 
@@ -54,22 +60,31 @@ def search(
     console.print(table)
 
 
-@civitai_app.command()
-def info(
-    target: str = typer.Argument(..., help="Model ID, URL, or AIR URN"),
-) -> None:
-    """Show model details and available versions."""
-    model_id = parse_model_ref(target)
-    if model_id is None:
+def _resolve_target(target: str, host: str | None) -> tuple[ModelRef, CivitaiClient]:
+    """Parse `target` and build a client, exiting cleanly on bad input."""
+    ref = parse_model_ref(target)
+    if ref is None:
         console.print(f"[red]Error:[/red] Could not parse model reference: {target}")
         raise typer.Exit(1)
+    return ref, CivitaiClient(host=host or ref.host)
 
-    client = CivitaiClient()
+
+def _api_call(fn, *args, **kwargs):
     try:
-        model = client.get_model(model_id)
+        return fn(*args, **kwargs)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+@civitai_app.command()
+def info(
+    target: str = typer.Argument(..., help="Model ID, URL (civitai.com/.red), or AIR URN"),
+    host: str | None = typer.Option(None, "--host", help="API host override (e.g. civitai.com, civitai.red)"),
+) -> None:
+    """Show model details and available versions."""
+    ref, client = _resolve_target(target, host)
+    model = _api_call(client.get_model, ref.model_id)
 
     console.print(f"\n[bold]{model['name']}[/bold]")
     console.print(f"  ID: {model['id']}")
@@ -77,42 +92,43 @@ def info(
         console.print(f"  Type: {model['type']}")
     if model.get("creator", {}).get("username"):
         console.print(f"  Creator: {model['creator']['username']}")
+    console.print(f"  Host: {client.host}")
 
     versions = model.get("modelVersions", [])
     if versions:
         console.print(f"\n  [bold]Versions ({len(versions)}):[/bold]")
-        for i, v in enumerate(versions):
+        for v in versions:
             pf = primary_file(v.get("files", []))
             size_str = format_size(int(pf.get("sizeKB", 0)) * 1024) if pf else "?"
-            console.print(f"    [{i}] {v['name']}  ({size_str})")
+            marker = " [yellow](selected)[/yellow]" if ref.version_id == v.get("id") else ""
+            console.print(f"    id={v['id']}  {v['name']}  ({size_str}){marker}")
 
 
 @civitai_app.command()
 def dl(
-    target: str = typer.Argument(..., help="Model ID, URL, or AIR URN"),
+    target: str = typer.Argument(..., help="Model ID, URL (civitai.com/.red), or AIR URN"),
     output: Path = typer.Option(".", "--output", "-o", help="Output directory"),
-    version: int = typer.Option(0, "--version", "-v", help="Version index (0 = latest)"),
+    version: int | None = typer.Option(
+        None,
+        "--version",
+        "-v",
+        help="Specific version ID (overrides URL/AIR; default: latest)",
+    ),
+    host: str | None = typer.Option(None, "--host", help="API host override (e.g. civitai.com, civitai.red)"),
 ) -> None:
     """Download a model from CivitAI."""
-    model_id = parse_model_ref(target)
-    if model_id is None:
-        console.print(f"[red]Error:[/red] Could not parse model reference: {target}")
-        raise typer.Exit(1)
-
-    client = CivitaiClient()
-    try:
-        dl_info = client.resolve_download(model_id, version_idx=version)
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+    ref, client = _resolve_target(target, host)
+    effective_version = version if version is not None else ref.version_id
+    dl_info = _api_call(client.resolve_download, ref.model_id, version_id=effective_version)
 
     output.mkdir(parents=True, exist_ok=True)
     dest = output / dl_info.filename
 
     console.print(f"\n  Model:    {dl_info.model_name}")
-    console.print(f"  Version:  {dl_info.version_name}")
+    console.print(f"  Version:  {dl_info.version_name} (id={dl_info.version_id})")
     console.print(f"  File:     {dl_info.filename}")
     console.print(f"  Size:     {format_size(dl_info.size_bytes)}")
+    console.print(f"  Host:     {client.host}")
     console.print(f"  Dest:     {dest}")
 
     if not typer.confirm("\nProceed?", default=True):
