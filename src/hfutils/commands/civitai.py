@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from hfutils.providers.civitai import (
+    DEFAULT_HOST,
     CivitaiClient,
     DownloadInfo,
     ModelRef,
@@ -72,7 +73,7 @@ def _resolve_target(target: str, host: str | None) -> tuple[ModelRef, CivitaiCli
 def _api_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
@@ -92,7 +93,8 @@ def info(
         console.print(f"  Type: {model['type']}")
     if model.get("creator", {}).get("username"):
         console.print(f"  Creator: {model['creator']['username']}")
-    console.print(f"  Host: {client.host}")
+    if client.host != DEFAULT_HOST:
+        console.print(f"  Host: {client.host}")
 
     versions = model.get("modelVersions", [])
     if versions:
@@ -128,7 +130,8 @@ def dl(
     console.print(f"  Version:  {dl_info.version_name} (id={dl_info.version_id})")
     console.print(f"  File:     {dl_info.filename}")
     console.print(f"  Size:     {format_size(dl_info.size_bytes)}")
-    console.print(f"  Host:     {client.host}")
+    if client.host != DEFAULT_HOST:
+        console.print(f"  Host:     {client.host}")
     console.print(f"  Dest:     {dest}")
 
     if not typer.confirm("\nProceed?", default=True):

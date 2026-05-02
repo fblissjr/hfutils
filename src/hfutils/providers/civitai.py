@@ -116,7 +116,6 @@ class CivitaiClient:
 
 _AIR_RE = re.compile(r"(?:^|:)civitai:(\d+)(?:@(\d+))?(?:$|[^\d])")
 _URL_RE = re.compile(r"(civitai\.(?:com|red))/models/(\d+)")
-_VERSION_QS_RE = re.compile(r"[?&]modelVersionId=(\d+)")
 
 
 def parse_model_ref(target: str) -> ModelRef | None:
@@ -140,8 +139,9 @@ def parse_model_ref(target: str) -> ModelRef | None:
     if url:
         host = url.group(1)
         model_id = int(url.group(2))
-        ver_match = _VERSION_QS_RE.search(target)
-        version_id = int(ver_match.group(1)) if ver_match else None
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(target).query)
+        ver = qs.get("modelVersionId", [None])[0]
+        version_id = int(ver) if ver else None
         return ModelRef(model_id=model_id, version_id=version_id, host=host)
 
     return None
