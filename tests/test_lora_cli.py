@@ -12,13 +12,13 @@ runner = CliRunner()
 
 class TestLoraConvert:
     def test_default_output_name_and_keys(self, tmp_path):
-        src = tmp_path / "Arco.safetensors"
+        src = tmp_path / "MyStyle.safetensors"
         src_keys = make_fal_krea2_lora(src)
 
         result = runner.invoke(app, ["lora", "convert", str(src)])
         assert result.exit_code == 0, result.output
 
-        out = tmp_path / "Arco_comfy.safetensors"
+        out = tmp_path / "MyStyle_comfy.safetensors"
         assert out.exists()
         loaded = load_file(str(out))
         assert all(k.startswith("transformer.") for k in loaded)

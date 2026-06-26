@@ -28,7 +28,7 @@ src/hfutils/
   __init__.py             -- public API (all stable symbols re-exported here)
   cli.py                  -- typer root + --version; registers inspect, convert, civitai
   errors.py               -- HfutilsError + subclasses (SourceError, PlanError, StreamMergeError, LoraConvertError, VerificationError, InsufficientSpaceError)
-  events.py               -- Observer + MergeObserver protocols + NullObserver / CollectingObserver / RichObserver
+  events.py               -- Observer + MergeObserver protocols + NullObserver / CollectingObserver / RichObserver (plan-scope) / RichMergeObserver (merge-scope)
   runner.py               -- PlanRunner (executes a PackPlan, dispatches events to an Observer)
   commands/
     inspect.py            -- thin CLI wrapper; dispatches via DetectLevel.FULL
@@ -92,6 +92,7 @@ tests/                    -- 250 tests, pytest (includes Hypothesis property tes
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
 - **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `LoraConvertError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
 - **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. Do not fork twin copies.
+- **Single-file streaming ops** (`convert_lora_keys`, `fuse_lora`) take a `MergeObserver`; for CLI progress build `RichMergeObserver(progress, label)` (merge-scope, in `events.py`) -- don't hand-roll one. `io/progress.copy_chunks` is EOF-only (own handles, copies from offset 0); bounded copies from a seek offset use `formats/lora._stream_region`.
 - **`PackOp.total_bytes` is a `cached_property`.** Single source of truth for preflight + progress sizing. Don't stat shards elsewhere; read `op.total_bytes`.
 - **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
