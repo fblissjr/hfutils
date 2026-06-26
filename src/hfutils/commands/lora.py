@@ -1,0 +1,143 @@
+"""`hfutils lora` -- LoRA key-scheme conversions.
+
+`lora convert <src>` renames a LoRA's tensor keys so a target loader accepts
+it (e.g. a fal.ai Krea-2 LoRA -> ComfyUI's default loader). `lora schemes`
+lists the known conversions.
+
+Distinct from `hfutils convert`, which changes on-disk *layout* (routing/merging
+whole files into ComfyUI folders). This changes a file's *internal* tensor
+names; the bytes are copied verbatim.
+"""
+
+from pathlib import Path
+
+import typer
+from rich.console import Console
+
+from hfutils.errors import LoraConvertError
+from hfutils.formats.lora import (
+    LORA_SCHEMES,
+    convert_lora_keys,
+    detect_lora_scheme,
+)
+from hfutils.formats.safetensors import verify_output
+from hfutils.inspect.safetensors import read_raw_header
+from hfutils.io.progress import make_progress
+
+console = Console()
+
+lora_app = typer.Typer(
+    name="lora",
+    help="LoRA key-scheme conversions (rename keys for a target loader).",
+    no_args_is_help=True,
+)
+
+
+def _error(msg: str) -> None:
+    console.print(f"[red]Error:[/red] {msg}")
+
+
+def _scheme_list() -> str:
+    return ", ".join(LORA_SCHEMES) or "(none)"
+
+
+@lora_app.command("schemes")
+def schemes() -> None:
+    """List the available LoRA conversion schemes."""
+    console.print("[bold]Available LoRA conversion schemes:[/bold]")
+    for scheme in LORA_SCHEMES.values():
+        console.print(f"  [cyan]{scheme.name}[/cyan]  {scheme.description}")
+
+
+@lora_app.command("convert")
+def convert(
+    source: Path = typer.Argument(..., help="LoRA .safetensors file to convert"),
+    out: Path | None = typer.Option(
+        None, "--out", "-o",
+        help="Output path (default: <source>_comfy.safetensors next to the input).",
+    ),
+    scheme: str = typer.Option(
+        "auto", "--scheme",
+        help=f"Conversion scheme, or 'auto' to detect. Known: {', '.join(LORA_SCHEMES)}.",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Convert even if the file doesn't match the named scheme's source format.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report the plan, write nothing."),
+    verify: bool = typer.Option(False, "--verify", help="Re-read the output and confirm it matches."),
+) -> None:
+    """Rename a LoRA's keys so a target loader accepts it."""
+    if not source.is_file():
+        _error(f"input not found: {source}")
+        raise typer.Exit(1)
+
+    try:
+        header = read_raw_header(source)
+    except (ValueError, OSError) as e:
+        _error(f"could not read safetensors header: {e}")
+        raise typer.Exit(1)
+
+    # Resolve the scheme.
+    if scheme == "auto":
+        resolved = detect_lora_scheme(header)
+        if resolved is None:
+            _error(
+                f"could not detect a known LoRA scheme for {source.name}. "
+                f"Known schemes: {_scheme_list()}. "
+                f"Pass --scheme <name> to force one."
+            )
+            raise typer.Exit(1)
+    else:
+        resolved = LORA_SCHEMES.get(scheme)
+        if resolved is None:
+            _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
+            raise typer.Exit(1)
+        if not resolved.matches(header) and not force:
+            _error(
+                f"{source.name} doesn't look like a '{resolved.name}' source LoRA. "
+                f"Re-run with --force to convert anyway."
+            )
+            raise typer.Exit(1)
+
+    dest = out or source.with_name(source.stem + "_comfy.safetensors")
+
+    console.print(f"Scheme: [cyan]{resolved.name}[/cyan] ({resolved.description})")
+    console.print(f"  in:  {source}")
+    console.print(f"  out: {dest}")
+    console.print(f"  tensors: {len(header.tensors)}")
+
+    if dry_run:
+        console.print("\n[yellow]Dry run[/yellow] -- no file written.")
+        return
+
+    try:
+        with make_progress(console) as progress:
+            task: dict[str, int] = {}
+
+            class _Progress:
+                def on_total(self, total_bytes: int) -> None:
+                    task["id"] = progress.add_task(f"convert -> {dest.name}", total=total_bytes)
+
+                def on_progress(self, bytes_copied: int) -> None:
+                    progress.update(task["id"], advance=bytes_copied)
+
+                def on_warning(self, message: str) -> None:
+                    console.print(f"[yellow]warn:[/yellow] {message}")
+
+            manifest = convert_lora_keys(source, dest, resolved, observer=_Progress())
+    except LoraConvertError as e:
+        _error(str(e))
+        raise typer.Exit(1)
+
+    if verify:
+        ok, problem = verify_output(dest, manifest)
+        if not ok:
+            _error(f"verify {dest.name}: {problem}")
+            raise typer.Exit(2)
+        console.print(f"[green]Verified[/green] {dest.name}: {len(manifest)} tensors match.")
+
+    console.print(
+        f"\n[green]Done.[/green] Wrote {len(manifest)} tensors to {dest}. "
+        f"Drop it into ComfyUI/models/loras/ and load with the default LoRA loader."
+    )

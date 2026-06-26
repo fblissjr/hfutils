@@ -1,8 +1,8 @@
-Last updated: 2026-04-19
+Last updated: 2026-06-26
 
 # hfutils
 
-Local model file toolkit: safetensors/GGUF inspection, layout conversion (ComfyUI + single-file), CivitAI downloads. Pure-Python streaming merge; no torch at runtime by default.
+Local model file toolkit: safetensors/GGUF inspection, layout conversion (ComfyUI + single-file), LoRA key-scheme conversion, CivitAI downloads. Pure-Python streaming merge; no torch at runtime by default.
 
 ## Commands
 
@@ -12,6 +12,8 @@ hfutils inspect <path> --recursive           # walk a tree (replaces the old `sc
 hfutils inspect <path> --detail              # full tensor list
 
 hfutils convert <src> --to <layout> [opts]   # unified convert; --to comfyui | single
+hfutils lora convert <lora> [opts]           # rename LoRA keys for a target loader
+hfutils lora schemes                         # list LoRA conversion schemes
 hfutils civitai search|info|dl
 ```
 
@@ -24,15 +26,17 @@ hfutils civitai search|info|dl
 src/hfutils/
   __init__.py             -- public API (all stable symbols re-exported here)
   cli.py                  -- typer root + --version; registers inspect, convert, civitai
-  errors.py               -- HfutilsError + subclasses (SourceError, PlanError, StreamMergeError, VerificationError, InsufficientSpaceError)
+  errors.py               -- HfutilsError + subclasses (SourceError, PlanError, StreamMergeError, LoraConvertError, VerificationError, InsufficientSpaceError)
   events.py               -- Observer + MergeObserver protocols + NullObserver / CollectingObserver / RichObserver
   runner.py               -- PlanRunner (executes a PackPlan, dispatches events to an Observer)
   commands/
     inspect.py            -- thin CLI wrapper; dispatches via DetectLevel.FULL
     convert.py            -- unified `convert <src> --to <layout>` command
+    lora.py               -- `lora` sub-app: convert (key-scheme rename) + schemes
     civitai.py            -- civitai sub-app (search, info, dl)
   formats/
     safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
+    lora.py               -- LoraScheme + LORA_SCHEMES registry + convert_lora_keys (streaming key rename)
   sources/
     detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView
     types.py              -- Source union + variants (PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource) + IntegrityError + display_kind()
@@ -53,7 +57,7 @@ src/hfutils/
   providers/
     civitai.py            -- CivitaiClient API client
     download.py           -- resumable download + rich progress (uses make_progress)
-tests/                    -- 171 tests, pytest (includes Hypothesis property tests for stream_merge)
+tests/                    -- 237 tests, pytest (includes Hypothesis property tests for stream_merge)
 ```
 
 ## Dev
@@ -85,12 +89,13 @@ tests/                    -- 171 tests, pytest (includes Hypothesis property tes
   - `PlanRunner(observer).run(plan)` executes. Observer receives lifecycle events.
   - CLI wraps with `RichObserver`. Library consumers attach `NullObserver`, `CollectingObserver`, or custom.
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
-- **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
+- **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `LoraConvertError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
 - **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. Do not fork twin copies.
 - **`PackOp.total_bytes` is a `cached_property`.** Single source of truth for preflight + progress sizing. Don't stat shards elsewhere; read `op.total_bytes`.
 - **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
 - **Architecture detection** is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries.
+- **LoRA conversion is scheme-driven** (`formats/lora.LORA_SCHEMES`). Each `LoraScheme` carries a `rename(key)->key` and a `matches(header)->bool` detector; add a new trainer->loader conversion by adding a registry entry. `convert_lora_keys` streams the data region verbatim (only the header's tensor names change) and returns a `Manifest` for `verify_output`, mirroring `stream_merge`. The `krea2` rename map inverts ComfyUI's `comfy.utils.krea2_to_diffusers` -- keep them in sync if Krea naming changes.
 - **Shared formatters** in `inspect/common.py` (`format_size`, `format_params`, `QUANT_DTYPE_LABELS`, `DTYPE_SIZES`); don't duplicate.
 
 ## Gotchas

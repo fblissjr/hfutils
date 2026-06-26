@@ -1,8 +1,8 @@
-Last updated: 2026-04-19
+Last updated: 2026-06-26
 
 # hfutils
 
-Local model file toolkit for safetensors and GGUF files, with CivitAI downloads and ComfyUI layout conversion.
+Local model file toolkit for safetensors and GGUF files, with CivitAI downloads, ComfyUI layout conversion, and LoRA key-scheme conversion.
 
 ## Install
 
@@ -21,8 +21,35 @@ hfutils inspect <path> --detail          # include full tensor list
 
 hfutils convert <src> --to <layout>      # one convert command for all targets
 
+hfutils lora convert <lora.safetensors>  # rename LoRA keys for a target loader
+hfutils lora schemes                     # list known LoRA conversion schemes
+
 hfutils civitai search|info|dl           # CivitAI sub-app (unchanged)
 ```
+
+## `lora convert` examples
+
+Some trainers emit LoRA keys in a naming scheme the target loader silently
+rejects (every key logs "lora key not loaded" and the LoRA does nothing). The
+fix is a pure key rename -- tensor data is copied verbatim.
+
+```
+# fal.ai Krea-2 LoRA -> ComfyUI default loader (auto-detected scheme)
+hfutils lora convert <lora.safetensors>
+# -> <lora>_comfy.safetensors next to the input
+
+# Pick the output path and re-read it to confirm the rename
+hfutils lora convert <lora.safetensors> -o <out.safetensors> --verify
+
+# Force a named scheme on a file that doesn't auto-detect
+hfutils lora convert <lora.safetensors> --scheme krea2 --force
+
+# Preview the plan, write nothing
+hfutils lora convert <lora.safetensors> --dry-run
+```
+
+Output matches the diffusers-style naming the official Krea-2 LoRAs ship with,
+so ComfyUI loads it through its dedicated Krea-2 remap with zero unmatched keys.
 
 ## `convert` examples
 

@@ -48,6 +48,48 @@ def make_sharded_component(
     return {**t1, **t2}
 
 
+# Krea-2 fal LoRA (PEFT naming) synthetic fixture ---------------------------
+# Mirrors the key structure fal.ai's Krea-2 trainer emits, so tests exercise
+# every rename branch without shipping a real 200 MB LoRA.
+
+_KREA2_ATTN = ["wq", "wk", "wv", "wo", "gate"]
+_KREA2_MLP = ["up", "down", "gate"]
+
+
+def _krea2_block_keys(prefix: str) -> list[str]:
+    keys: list[str] = []
+    for a in _KREA2_ATTN:
+        keys += [f"{prefix}.attn.{a}.lora_A.weight", f"{prefix}.attn.{a}.lora_B.weight"]
+    for m in _KREA2_MLP:
+        keys += [f"{prefix}.mlp.{m}.lora_A.weight", f"{prefix}.mlp.{m}.lora_B.weight"]
+    return keys
+
+
+def fal_krea2_lora_keys(n_blocks: int = 2) -> list[str]:
+    """The full set of PEFT-style keys a fal Krea-2 LoRA contains."""
+    p = "base_model.model"
+    keys: list[str] = []
+    for i in range(n_blocks):
+        keys += _krea2_block_keys(f"{p}.blocks.{i}")
+    for single in ["first", "last.linear", "tmlp.0", "tmlp.2", "tproj.1", "txtmlp.1", "txtmlp.3"]:
+        keys += [f"{p}.{single}.lora_A.weight", f"{p}.{single}.lora_B.weight"]
+    keys += [f"{p}.txtfusion.projector.lora_A.weight", f"{p}.txtfusion.projector.lora_B.weight"]
+    for i in (0, 1):
+        keys += _krea2_block_keys(f"{p}.txtfusion.layerwise_blocks.{i}")
+        keys += _krea2_block_keys(f"{p}.txtfusion.refiner_blocks.{i}")
+    return keys
+
+
+def make_fal_krea2_lora(
+    path: Path, *, n_blocks: int = 2, metadata: dict[str, str] | None = None,
+) -> list[str]:
+    """Write a synthetic fal Krea-2 LoRA to `path`; return its source keys."""
+    keys = fal_krea2_lora_keys(n_blocks)
+    tensors = {k: torch.randn(2, 2) for k in keys}
+    save_file(tensors, path, metadata=metadata or {"base_model": "fal/krea-2", "lora_rank": "32"})
+    return keys
+
+
 def make_diffusers_pipeline(tmp: Path) -> None:
     """Create a diffusers pipeline dir with transformer (sharded), vae, text_encoder.
 

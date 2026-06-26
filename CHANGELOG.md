@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0
+
+### Major
+
+- **LoRA key-scheme conversion** (`hfutils lora`): rename a LoRA's tensor keys so a target loader accepts it, without touching tensor data.
+  - `hfutils lora convert <lora.safetensors>` -- auto-detects the source scheme, writes `<lora>_comfy.safetensors`. Flags: `--out/-o`, `--scheme`, `--force`, `--dry-run`, `--verify`.
+  - `hfutils lora schemes` -- lists registered schemes.
+  - First scheme `krea2`: fal.ai's Krea-2 trainer emits PEFT-style keys (`base_model.model.blocks.0.attn.wq.lora_A.weight`) that ComfyUI's default loader rejects; this rewrites them to the diffusers-style names the official Krea-2 LoRAs use (`transformer.transformer_blocks.0.attn.to_q.lora_A.weight`). The rename map inverts ComfyUI's own `krea2_to_diffusers`; verified to reproduce the official `krea2_darkbrush` key set exactly (528/528 keys, all shapes matching).
+- **Public API / library surface**: `convert_lora_keys`, `detect_lora_scheme`, `LoraScheme`, `LORA_SCHEMES`, `KREA2_FAL`, and `LoraConvertError`. `convert_lora_keys` is streaming and torch-free (mirrors `stream_merge`: takes a `MergeObserver`, returns a `Manifest` for `verify_output`).
+
+### Medium
+
+- **Error hierarchy** gains `LoraConvertError` (key collision / unexpected EOF during a LoRA convert).
+
+### Notes
+
+- `plan_pack` (deprecated alias for `plan_comfyui`) is retained; removal deferred to 0.9.
+
 ## 0.7.0
 
 ### Breaking

@@ -5,7 +5,7 @@ import hfutils
 
 def test_version_string():
     assert isinstance(hfutils.__version__, str)
-    assert hfutils.__version__ == "0.7.0"
+    assert hfutils.__version__ == "0.8.0"
 
 
 def test_detect_source_exported():
@@ -49,3 +49,12 @@ def test_integrity_error_exported():
 
 def test_plan_single_exported():
     assert callable(hfutils.plan_single)
+
+
+def test_lora_convert_exported():
+    assert callable(hfutils.convert_lora_keys)
+    assert callable(hfutils.detect_lora_scheme)
+    assert "krea2" in hfutils.LORA_SCHEMES
+    assert hfutils.KREA2_FAL.name == "krea2"
+    assert hfutils.LoraScheme is not None
+    assert issubclass(hfutils.LoraConvertError, hfutils.HfutilsError)

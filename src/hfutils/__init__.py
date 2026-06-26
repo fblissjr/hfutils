@@ -6,6 +6,7 @@ Library surface for programmatic use. The CLI is at `hfutils.cli:app`.
 from hfutils.errors import (
     HfutilsError,
     InsufficientSpaceError,
+    LoraConvertError,
     PlanError,
     SourceError,
     StreamMergeError,
@@ -22,6 +23,13 @@ from hfutils.events import (
     per_op_merge_observer,
 )
 from hfutils.runner import PlanRunner
+from hfutils.formats.lora import (
+    KREA2_FAL,
+    LORA_SCHEMES,
+    LoraScheme,
+    convert_lora_keys,
+    detect_lora_scheme,
+)
 from hfutils.formats.safetensors import (
     Manifest,
     manifest_from_shards,
@@ -33,7 +41,7 @@ from hfutils.layouts.comfyui import (
     ConvertTarget,
     PackOp,
     plan_comfyui,
-    plan_pack,  # deprecated alias; dropped in 0.8
+    plan_pack,  # deprecated alias; dropped in 0.9
     plan_single,
 )
 from hfutils.layouts.plan import PackPlan
@@ -50,7 +58,7 @@ from hfutils.sources.types import (
     UnknownSource,
 )
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "CollectingMergeObserver",
@@ -63,6 +71,10 @@ __all__ = [
     "HfutilsError",
     "InsufficientSpaceError",
     "IntegrityError",
+    "KREA2_FAL",
+    "LORA_SCHEMES",
+    "LoraConvertError",
+    "LoraScheme",
     "Manifest",
     "MergeObserver",
     "NullMergeObserver",
@@ -82,6 +94,8 @@ __all__ = [
     "UnknownSource",
     "VerificationError",
     "__version__",
+    "convert_lora_keys",
+    "detect_lora_scheme",
     "detect_source",
     "enrich",
     "manifest_from_shards",

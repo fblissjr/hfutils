@@ -21,6 +21,10 @@ class StreamMergeError(HfutilsError):
     """Failure during stream_merge (unexpected EOF, duplicate tensor, etc.)."""
 
 
+class LoraConvertError(HfutilsError):
+    """Failure during a LoRA key-scheme conversion (key collision, unexpected EOF)."""
+
+
 class VerificationError(HfutilsError):
     """Post-merge --verify found a mismatch between plan and output."""
 
