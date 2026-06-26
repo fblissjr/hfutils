@@ -12,7 +12,7 @@ from hfutils.layouts.comfyui import (
     TARGET_FOLDERS,
     ConvertTarget,
     PackOp,
-    plan_pack,
+    plan_comfyui,
 )
 from hfutils.sources.detect import detect_source
 
@@ -29,13 +29,13 @@ def _make_pipeline(tmp: Path) -> None:
         save_file({"w": torch.randn(2, 2)}, tmp / name / "model.safetensors")
 
 
-class TestPlanPack:
+class TestPlanComfyui:
     def test_diffusers_pipeline_plans_all_components(self, tmp_path):
         _make_pipeline(tmp_path)
         src = detect_source(tmp_path)
         comfy = tmp_path / "comfy"
 
-        plan = plan_pack(src, comfy, name="X")
+        plan = plan_comfyui(src, comfy, name="X")
 
         by_label = {op.label: op for op in plan.ops}
         assert by_label["transformer"].dest == comfy / "diffusion_models/X.safetensors"
@@ -45,13 +45,13 @@ class TestPlanPack:
     def test_only_filter(self, tmp_path):
         _make_pipeline(tmp_path)
         src = detect_source(tmp_path)
-        plan = plan_pack(src, tmp_path / "c", name="X", only=["transformer"])
+        plan = plan_comfyui(src, tmp_path / "c", name="X", only=["transformer"])
         assert [op.label for op in plan.ops] == ["transformer"]
 
     def test_skip_filter(self, tmp_path):
         _make_pipeline(tmp_path)
         src = detect_source(tmp_path)
-        plan = plan_pack(src, tmp_path / "c", name="X", skip=["text_encoder"])
+        plan = plan_comfyui(src, tmp_path / "c", name="X", skip=["text_encoder"])
         assert sorted(op.label for op in plan.ops) == ["transformer", "vae"]
 
     def test_single_file_requires_target(self, tmp_path):
@@ -60,14 +60,14 @@ class TestPlanPack:
         src = detect_source(f)
 
         with pytest.raises(PlanError, match="--as"):
-            plan_pack(src, tmp_path / "c", name="X")
+            plan_comfyui(src, tmp_path / "c", name="X")
 
     def test_single_file_with_target(self, tmp_path):
         f = tmp_path / "m.safetensors"
         save_file({"w": torch.randn(2, 2)}, f)
         src = detect_source(f)
 
-        plan = plan_pack(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
+        plan = plan_comfyui(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
         assert len(plan) == 1
         assert plan.ops[0].dest == tmp_path / "c" / "diffusion_models/X.safetensors"
         assert plan.ops[0].kind == "copy"
@@ -85,7 +85,7 @@ class TestPlanPack:
         }))
         src = detect_source(tmp_path)
 
-        plan = plan_pack(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
+        plan = plan_comfyui(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
         assert len(plan) == 1
         assert plan.ops[0].kind == "merge"
 
@@ -95,7 +95,7 @@ class TestPlanPack:
         src = detect_source(f)
 
         with pytest.raises(PlanError, match="Unknown"):
-            plan_pack(src, tmp_path / "c", name="X", target="bogus")
+            plan_comfyui(src, tmp_path / "c", name="X", target="bogus")
 
     def test_packop_kind_derived_from_shards(self):
         op_copy = PackOp(

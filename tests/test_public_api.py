@@ -27,8 +27,8 @@ def test_stream_merge_exported():
     assert callable(hfutils.stream_merge)
 
 
-def test_plan_pack_exported():
-    assert callable(hfutils.plan_pack)
+def test_plan_comfyui_exported():
+    assert callable(hfutils.plan_comfyui)
     assert hfutils.PackOp is not None
     assert hfutils.ConvertTarget.VAE.value == "vae"
 

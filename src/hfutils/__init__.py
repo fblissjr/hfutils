@@ -44,7 +44,6 @@ from hfutils.layouts.comfyui import (
     ConvertTarget,
     PackOp,
     plan_comfyui,
-    plan_pack,  # deprecated alias; dropped in 0.9
     plan_single,
 )
 from hfutils.layouts.plan import PackPlan
@@ -107,7 +106,6 @@ __all__ = [
     "manifest_from_shards",
     "per_op_merge_observer",
     "plan_comfyui",
-    "plan_pack",
     "plan_single",
     "read_raw_header",
     "stream_merge",

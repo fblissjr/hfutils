@@ -62,7 +62,7 @@ class TestMixedPipeline:
         assert result.exit_code == 0, result.output
         assert (comfy / "diffusion_models/M.safetensors").exists()
         assert (comfy / "text_encoders/M_te.safetensors").exists()
-        # The .bin vae has no .safetensors; plan_pack produces no op for it.
+        # The .bin vae has no .safetensors; plan_comfyui produces no op for it.
         assert not (comfy / "vae" / "M_vae.safetensors").exists()
 
     def test_convert_comfyui_with_only_vae_fails_cleanly(self, tmp_path):

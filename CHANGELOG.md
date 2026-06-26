@@ -2,6 +2,10 @@
 
 ## 0.8.0
 
+### Breaking
+
+- **`plan_pack` removed** -- the deprecated alias for `plan_comfyui` (kept since 0.7.0) is gone. Call `plan_comfyui`.
+
 ### Major
 
 - **LoRA key-scheme conversion** (`hfutils lora`): rename a LoRA's tensor keys so a target loader accepts it, without touching tensor data.
@@ -15,10 +19,6 @@
 
 - **Error hierarchy** gains `LoraConvertError` (key collision / unexpected EOF during a LoRA convert).
 - **`RichMergeObserver`** (`hfutils.events`): a merge-scope rich-progress observer (the counterpart to `RichObserver`), so single-file streaming ops get CLI progress without a hand-rolled observer.
-
-### Notes
-
-- `plan_pack` (deprecated alias for `plan_comfyui`) is retained; removal deferred to 0.9.
 
 ## 0.7.0
 

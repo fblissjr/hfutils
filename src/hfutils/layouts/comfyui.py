@@ -178,10 +178,6 @@ def plan_comfyui(
             )
 
 
-# Backward-compat alias for one release. Dropped in 0.8.
-plan_pack = plan_comfyui
-
-
 def plan_single(source: Source, output: Path) -> "PackPlan":
     """Build a PackPlan with one op: dump the source's safetensors into `output`.
 
