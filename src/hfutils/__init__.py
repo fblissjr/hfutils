@@ -19,6 +19,7 @@ from hfutils.events import (
     NullMergeObserver,
     NullObserver,
     Observer,
+    RichMergeObserver,
     RichObserver,
     per_op_merge_observer,
 )
@@ -90,6 +91,7 @@ __all__ = [
     "PlanRunner",
     "RichObserver",
     "PytorchDirSource",
+    "RichMergeObserver",
     "SafetensorsFileSource",
     "Source",
     "SourceError",

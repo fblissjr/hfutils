@@ -15,14 +15,16 @@ import typer
 from rich.console import Console
 
 from hfutils.errors import LoraConvertError
+from hfutils.events import RichMergeObserver
 from hfutils.formats.lora import (
     LORA_SCHEMES,
+    LoraScheme,
     convert_lora_keys,
     detect_lora_scheme,
     fuse_lora,
 )
 from hfutils.formats.safetensors import verify_output
-from hfutils.inspect.safetensors import read_raw_header
+from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import make_progress
 
 console = Console()
@@ -40,6 +42,24 @@ def _error(msg: str) -> None:
 
 def _scheme_list() -> str:
     return ", ".join(LORA_SCHEMES) or "(none)"
+
+
+def _resolve_scheme(header: RawHeader, scheme: str) -> LoraScheme:
+    """Resolve a scheme name (or 'auto' to detect) to a LoraScheme, or exit."""
+    if scheme == "auto":
+        resolved = detect_lora_scheme(header)
+        if resolved is None:
+            _error(
+                f"could not detect a known LoRA scheme. Known: {_scheme_list()}. "
+                f"Pass --scheme <name> to force one."
+            )
+            raise typer.Exit(1)
+        return resolved
+    resolved = LORA_SCHEMES.get(scheme)
+    if resolved is None:
+        _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
+        raise typer.Exit(1)
+    return resolved
 
 
 @lora_app.command("schemes")
@@ -79,27 +99,13 @@ def convert(
         _error(f"could not read safetensors header: {e}")
         raise typer.Exit(1)
 
-    # Resolve the scheme.
-    if scheme == "auto":
-        resolved = detect_lora_scheme(header)
-        if resolved is None:
-            _error(
-                f"could not detect a known LoRA scheme for {source.name}. "
-                f"Known schemes: {_scheme_list()}. "
-                f"Pass --scheme <name> to force one."
-            )
-            raise typer.Exit(1)
-    else:
-        resolved = LORA_SCHEMES.get(scheme)
-        if resolved is None:
-            _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
-            raise typer.Exit(1)
-        if not resolved.matches(header) and not force:
-            _error(
-                f"{source.name} doesn't look like a '{resolved.name}' source LoRA. "
-                f"Re-run with --force to convert anyway."
-            )
-            raise typer.Exit(1)
+    resolved = _resolve_scheme(header, scheme)
+    if scheme != "auto" and not resolved.matches(header) and not force:
+        _error(
+            f"{source.name} doesn't look like a '{resolved.name}' source LoRA. "
+            f"Re-run with --force to convert anyway."
+        )
+        raise typer.Exit(1)
 
     dest = out or source.with_name(source.stem + "_comfy.safetensors")
 
@@ -114,19 +120,8 @@ def convert(
 
     try:
         with make_progress(console) as progress:
-            task: dict[str, int] = {}
-
-            class _Progress:
-                def on_total(self, total_bytes: int) -> None:
-                    task["id"] = progress.add_task(f"convert -> {dest.name}", total=total_bytes)
-
-                def on_progress(self, bytes_copied: int) -> None:
-                    progress.update(task["id"], advance=bytes_copied)
-
-                def on_warning(self, message: str) -> None:
-                    console.print(f"[yellow]warn:[/yellow] {message}")
-
-            manifest = convert_lora_keys(source, dest, resolved, observer=_Progress())
+            observer = RichMergeObserver(progress, f"convert -> {dest.name}", console)
+            manifest = convert_lora_keys(source, dest, resolved, observer=observer)
     except LoraConvertError as e:
         _error(str(e))
         raise typer.Exit(1)
@@ -171,17 +166,7 @@ def fuse(
         _error(f"could not read LoRA header: {e}")
         raise typer.Exit(1)
 
-    if scheme == "auto":
-        resolved = detect_lora_scheme(header)
-        if resolved is None:
-            _error(f"could not detect a known LoRA scheme. Known: {_scheme_list()}.")
-            raise typer.Exit(1)
-    else:
-        resolved = LORA_SCHEMES.get(scheme)
-        if resolved is None:
-            _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
-            raise typer.Exit(1)
-
+    resolved = _resolve_scheme(header, scheme)
     if resolved.to_base_key is None:
         _error(f"scheme '{resolved.name}' does not support fuse.")
         raise typer.Exit(1)
@@ -193,19 +178,8 @@ def fuse(
 
     try:
         with make_progress(console) as progress:
-            task: dict[str, int] = {}
-
-            class _Progress:
-                def on_total(self, total_bytes: int) -> None:
-                    task["id"] = progress.add_task(f"fuse -> {out.name}", total=total_bytes)
-
-                def on_progress(self, bytes_copied: int) -> None:
-                    progress.update(task["id"], advance=bytes_copied)
-
-                def on_warning(self, message: str) -> None:
-                    console.print(f"[yellow]warn:[/yellow] {message}")
-
-            result = fuse_lora(lora, base, out, resolved, strength=strength, alpha=alpha, observer=_Progress())
+            observer = RichMergeObserver(progress, f"fuse -> {out.name}", console)
+            result = fuse_lora(lora, base, out, resolved, strength=strength, alpha=alpha, observer=observer)
     except LoraConvertError as e:
         _error(str(e))
         raise typer.Exit(1)

@@ -5,11 +5,13 @@ Some trainers emit LoRA keys in a naming scheme the target loader doesn't
 recognize, so every key is silently skipped at load time. The fix is a pure
 rename: the tensor *data* is correct, only the keys are wrong.
 
-This module is streaming and torch-free, like `formats.safetensors`. Only the
-header changes; the tensor data region is copied verbatim. The on-disk
-`data_offsets` are relative to the start of the data region, so renaming keys
-(which only changes the header length) leaves every tensor's bytes valid where
-they already sit -- we copy the whole data region in one pass.
+The key-rename path (`convert_lora_keys`) is streaming and torch-free, like
+`formats.safetensors`: only the header changes; the tensor data region is copied
+verbatim. The on-disk `data_offsets` are relative to the start of the data
+region, so renaming keys (which only changes the header length) leaves every
+tensor's bytes valid where they already sit -- we copy the data region in one
+pass. `fuse_lora` is the one exception -- it does real tensor math, so it is
+torch-gated (the `[ml]` extra) with a lazy import.
 
 Schemes are table-driven (`LORA_SCHEMES`); add a new architecture by adding a
 `LoraScheme` entry. The first scheme is `krea2`: fal.ai's Krea-2 trainer emits
@@ -34,8 +36,26 @@ import orjson
 from hfutils.errors import LoraConvertError
 from hfutils.events import MergeObserver, NullMergeObserver
 from hfutils.formats.safetensors import Manifest
+from hfutils.inspect.common import QUANT_DTYPE_LABELS
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import COPY_CHUNK
+
+
+def _stream_region(fin, fout, size: int, src_path: Path, on_chunk=None) -> None:
+    """Copy `size` bytes from `fin`'s current position to `fout` in COPY_CHUNK
+    blocks, raising `LoraConvertError` on a short read. `on_chunk(n)` fires per
+    block when given. Shared by the streaming write paths below."""
+    remaining = size
+    while remaining > 0:
+        chunk = fin.read(min(COPY_CHUNK, remaining))
+        if not chunk:
+            raise LoraConvertError(
+                f"Unexpected EOF reading {src_path} ({remaining} bytes remaining)"
+            )
+        fout.write(chunk)
+        remaining -= len(chunk)
+        if on_chunk is not None:
+            on_chunk(len(chunk))
 
 
 @dataclass(frozen=True)
@@ -115,26 +135,15 @@ def _krea2_matches(header: RawHeader) -> bool:
     return is_lora and has_text_fusion
 
 
-# Diffusers inner name -> native (ComfyUI checkpoint) inner name. Inverts the
-# inner part of `_krea2_rename`; mirrors ComfyUI's `krea2_to_diffusers`.
+# Diffusers inner name -> native (ComfyUI checkpoint) inner name, derived by
+# inverting the forward tables above (strip the `transformer.` prefix and the
+# trailing dot). Deriving them keeps the two directions from drifting apart.
 _KREA2_DIFFUSERS_SINGLES_INV: dict[str, str] = {
-    "img_in": "first",
-    "final_layer.linear": "last.linear",
-    "time_embed.linear_1": "tmlp.0",
-    "time_embed.linear_2": "tmlp.2",
-    "time_mod_proj": "tproj.1",
-    "txt_in.linear_1": "txtmlp.1",
-    "txt_in.linear_2": "txtmlp.3",
+    dst[len("transformer."):-1]: src[len("transformer."):-1]
+    for src, dst in _KREA2_SINGLES.items()
 }
 _KREA2_SUBMODULES_INV: dict[str, str] = {
-    ".attn.to_q": ".attn.wq",
-    ".attn.to_k": ".attn.wk",
-    ".attn.to_v": ".attn.wv",
-    ".attn.to_out.0": ".attn.wo",
-    ".attn.to_gate": ".attn.gate",
-    ".ff.up": ".mlp.up",
-    ".ff.down": ".mlp.down",
-    ".ff.gate": ".mlp.gate",
+    dst[:-1]: src[:-1] for src, dst in _KREA2_SUBMODULES.items()
 }
 
 
@@ -238,16 +247,7 @@ def convert_lora_keys(
         fout.write(struct.pack("<Q", len(header_bytes)))
         fout.write(header_bytes)
         fin.seek(raw.data_region_start)
-        remaining = data_total
-        while remaining > 0:
-            chunk = fin.read(min(COPY_CHUNK, remaining))
-            if not chunk:
-                raise LoraConvertError(
-                    f"Unexpected EOF reading {src_path} ({remaining} bytes remaining)"
-                )
-            fout.write(chunk)
-            remaining -= len(chunk)
-            obs.on_progress(len(chunk))
+        _stream_region(fin, fout, data_total, src_path, on_chunk=obs.on_progress)
 
     return manifest
 
@@ -257,9 +257,10 @@ def convert_lora_keys(
 # --------------------------------------------------------------------------
 
 def _is_quantized_dtype(dtype: str) -> bool:
-    """fp8 weights carry a separate per-tensor scale, so the stored value is not
-    the real weight; fusing W + delta into them would be wrong."""
-    return dtype.startswith("F8")
+    """Quantized weights carry a separate per-tensor scale, so the stored value
+    is not the real weight; fusing W + delta into them would be wrong. Uses the
+    central quant-dtype table (fp8 / int8 / uint8)."""
+    return dtype in QUANT_DTYPE_LABELS
 
 
 @dataclass(frozen=True)
@@ -268,7 +269,6 @@ class FuseResult:
     fused: int          # base weights that received a LoRA delta
     lora_modules: int   # LoRA modules discovered in the file
     unmatched: list[str]  # LoRA modules with no matching base weight
-    scale_alpha: float  # alpha used (per-module scale is alpha / rank)
 
 
 def fuse_lora(
@@ -319,7 +319,7 @@ def fuse_lora(
             try:
                 alpha = float(meta_alpha)
             except (TypeError, ValueError):
-                alpha = None
+                pass
 
     # Group LoRA tensors into modules keyed by their base weight name.
     lora_sd = st_load(str(lora_path))
@@ -350,9 +350,8 @@ def fuse_lora(
     with safe_open(base_path, framework="pt") as bf, \
             open(base_path, "rb") as raw_in, open(out_path, "wb") as out:
         # Output header == base header verbatim (names/shapes/dtypes/offsets unchanged).
-        header_len = struct.unpack("<Q", raw_in.read(8))[0]
-        header_bytes = raw_in.read(header_len)
-        out.write(struct.pack("<Q", header_len))
+        header_bytes = raw_in.read(8 + base_raw.header_length)[8:]
+        out.write(struct.pack("<Q", base_raw.header_length))
         out.write(header_bytes)
 
         fused = 0
@@ -365,8 +364,7 @@ def fuse_lora(
                         f"full-precision (bf16) base, then quantize the result"
                     )
                 w = bf.get_tensor(entry.name)
-                a = modules[entry.name]["A"]
-                b = modules[entry.name]["B"]
+                a, b = fuseable[entry.name]["A"], fuseable[entry.name]["B"]
                 rank = a.shape[0]
                 scale = (alpha / rank if alpha is not None else 1.0) * strength
                 delta = torch.matmul(b.to(torch.float32), a.to(torch.float32)) * scale
@@ -376,24 +374,11 @@ def fuse_lora(
                         f"vs delta {tuple(delta.shape)}"
                     )
                 fused_w = (w.to(torch.float32) + delta).to(w.dtype).contiguous()
-                out.write(fused_w.flatten().view(torch.uint8).numpy().tobytes())
+                out.write(fused_w.flatten().view(torch.uint8).numpy())
                 fused += 1
             else:
-                raw_in.seek(8 + header_len + entry.data_offset_start)
-                remaining = size
-                while remaining > 0:
-                    chunk = raw_in.read(min(COPY_CHUNK, remaining))
-                    if not chunk:
-                        raise LoraConvertError(
-                            f"Unexpected EOF reading {base_path} ({remaining} bytes remaining)"
-                        )
-                    out.write(chunk)
-                    remaining -= len(chunk)
+                raw_in.seek(base_raw.data_region_start + entry.data_offset_start)
+                _stream_region(raw_in, out, size, base_path)
             obs.on_progress(size)
 
-    return FuseResult(
-        fused=fused,
-        lora_modules=len(modules),
-        unmatched=unmatched,
-        scale_alpha=alpha if alpha is not None else float("nan"),
-    )
+    return FuseResult(fused=fused, lora_modules=len(modules), unmatched=unmatched)

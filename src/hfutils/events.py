@@ -25,6 +25,8 @@ from hfutils.io.progress import make_progress
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from rich.progress import Progress
+
     from hfutils.formats.safetensors import Manifest
     from hfutils.layouts.comfyui import PackOp
 
@@ -64,6 +66,31 @@ class CollectingMergeObserver:
 
     def on_warning(self, message: str) -> None:
         self.warnings.append(message)
+
+
+class RichMergeObserver:
+    """Renders a single rich progress task for one streaming op (merge / convert
+    / fuse). The merge-scope counterpart to `RichObserver`; lives here so CLI and
+    library callers can attach rich progress without hand-rolling a MergeObserver.
+
+    The caller owns the `Progress` (typically `with make_progress(console)`) and
+    passes it in, plus the task label."""
+
+    def __init__(self, progress: "Progress", label: str, console: Console | None = None) -> None:
+        self._progress = progress
+        self._label = label
+        self._console = console if console is not None else Console()
+        self._task: int | None = None
+
+    def on_total(self, total_bytes: int) -> None:
+        self._task = self._progress.add_task(self._label, total=total_bytes)
+
+    def on_progress(self, bytes_copied: int) -> None:
+        if self._task is not None:
+            self._progress.update(self._task, advance=bytes_copied)
+
+    def on_warning(self, message: str) -> None:
+        self._console.print(f"[yellow]warn:[/yellow] {message}")
 
 
 # --------------------------------------------------------------------------
