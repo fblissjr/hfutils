@@ -22,6 +22,7 @@ hfutils inspect <path> --detail          # include full tensor list
 hfutils convert <src> --to <layout>      # one convert command for all targets
 
 hfutils lora convert <lora.safetensors>  # rename LoRA keys for a target loader
+hfutils lora fuse <lora> <base> -o <out> # bake a LoRA into a base checkpoint
 hfutils lora schemes                     # list known LoRA conversion schemes
 
 hfutils civitai search|info|dl           # CivitAI sub-app (unchanged)
@@ -50,6 +51,23 @@ hfutils lora convert <lora.safetensors> --dry-run
 
 Output matches the diffusers-style naming the official Krea-2 LoRAs ship with,
 so ComfyUI loads it through its dedicated Krea-2 remap with zero unmatched keys.
+
+## `lora fuse` examples
+
+Bake a LoRA into the full-precision base so you can quantize the result and run
+with zero LoRA runtime cost (no per-inference patch). Requires the `[ml]` extra
+(torch). Fuse into the **bf16** base, then quantize the output.
+
+```
+# Bake at full strength
+hfutils lora fuse <lora.safetensors> <base_bf16.safetensors> -o <fused.safetensors>
+
+# Partial strength (LoRAs trained hot often look best fused at 0.6-0.8)
+hfutils lora fuse <lora> <base_bf16> -o <fused> --strength 0.7
+```
+
+Accepts the LoRA in either source or converted naming. Streams the base
+tensor-by-tensor, so a 26 GB checkpoint fuses in seconds with a few MB of RAM.
 
 ## `convert` examples
 

@@ -11,10 +11,15 @@ from hfutils.formats.lora import (
     LoraScheme,
     convert_lora_keys,
     detect_lora_scheme,
+    fuse_lora,
 )
 from hfutils.formats.safetensors import verify_output
 from hfutils.inspect.safetensors import read_raw_header
-from tests.conftest import fal_krea2_lora_keys, make_fal_krea2_lora
+from tests.conftest import (
+    fal_krea2_lora_keys,
+    make_fal_krea2_lora,
+    make_krea2_base,
+)
 
 # Exact source->target pairs covering every rename rule. An independent spec:
 # if the converter drifts, these break. Derived from ComfyUI's krea2_to_diffusers.
@@ -95,6 +100,20 @@ class TestDetectScheme:
         f = tmp_path / "plain.safetensors"
         save_file({"w": torch.randn(2, 2)}, f)
         assert detect_lora_scheme(read_raw_header(f)) is None
+
+    def test_detects_krea2_from_converted_diffusers_lora(self, tmp_path):
+        fal = tmp_path / "fal.safetensors"
+        make_fal_krea2_lora(fal)
+        conv = tmp_path / "conv.safetensors"
+        convert_lora_keys(fal, conv, KREA2_FAL)
+        scheme = detect_lora_scheme(read_raw_header(conv))
+        assert scheme is not None and scheme.name == "krea2"
+
+    def test_base_checkpoint_does_not_match(self, tmp_path):
+        # The base has a text-fusion stack too, but no LoRA tensors.
+        base = tmp_path / "base.safetensors"
+        make_krea2_base(base)
+        assert detect_lora_scheme(read_raw_header(base)) is None
 
     def test_krea2_registered(self):
         assert "krea2" in LORA_SCHEMES
@@ -178,3 +197,117 @@ class TestConvertLoraKeys:
         )
         with pytest.raises(LoraConvertError, match="collision"):
             convert_lora_keys(src, tmp_path / "out.safetensors", collapse)
+
+
+class TestKrea2BaseKey:
+    def test_fal_and_diffusers_map_to_same_native_weight(self):
+        f = KREA2_FAL.to_base_key
+        assert f is not None
+        assert f("base_model.model.blocks.0.attn.wq") == "blocks.0.attn.wq.weight"
+        assert f("transformer.transformer_blocks.0.attn.to_q") == "blocks.0.attn.wq.weight"
+        assert f("base_model.model.blocks.3.mlp.down") == "blocks.3.mlp.down.weight"
+        assert f("transformer.transformer_blocks.3.ff.down") == "blocks.3.mlp.down.weight"
+        assert f("transformer.img_in") == "first.weight"
+        assert f("transformer.final_layer.linear") == "last.linear.weight"
+        assert f("transformer.time_embed.linear_1") == "tmlp.0.weight"
+        assert f("transformer.time_mod_proj") == "tproj.1.weight"
+        assert f("transformer.txt_in.linear_2") == "txtmlp.3.weight"
+        assert f("transformer.text_fusion.projector") == "txtfusion.projector.weight"
+        assert (f("transformer.text_fusion.refiner_blocks.1.attn.to_out.0")
+                == "txtfusion.refiner_blocks.1.attn.wo.weight")
+        assert f("something.unrelated") is None
+
+
+class TestFuseLora:
+    def test_fuse_adds_low_rank_delta(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+
+        res = fuse_lora(lora_p, base_p, out_p, KREA2_FAL, strength=1.0)
+        assert res.fused == res.lora_modules and res.unmatched == []
+
+        lora = load_file(str(lora_p))
+        base = load_file(str(base_p))
+        fused = load_file(str(out_p))
+        key = "blocks.0.attn.wq.weight"
+        a = lora["base_model.model.blocks.0.attn.wq.lora_A.weight"]
+        b = lora["base_model.model.blocks.0.attn.wq.lora_B.weight"]
+        expected = (base[key].to(torch.float32) + b.to(torch.float32) @ a.to(torch.float32)).to(base[key].dtype)
+        assert torch.equal(fused[key], expected)
+
+    def test_non_lora_tensors_copied_verbatim(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        base = make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+        fuse_lora(lora_p, base_p, out_p, KREA2_FAL)
+
+        fused = load_file(str(out_p))
+        assert torch.equal(fused["blocks.0.prenorm.scale"], base["blocks.0.prenorm.scale"])
+
+    def test_names_shapes_dtypes_preserved(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+        fuse_lora(lora_p, base_p, out_p, KREA2_FAL)
+
+        b = {t.name: (t.dtype, tuple(t.shape)) for t in read_raw_header(base_p).tensors}
+        o = {t.name: (t.dtype, tuple(t.shape)) for t in read_raw_header(out_p).tensors}
+        assert o == b
+
+    def test_strength_zero_is_identity(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        base = make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+        fuse_lora(lora_p, base_p, out_p, KREA2_FAL, strength=0.0)
+
+        fused = load_file(str(out_p))
+        for k, v in base.items():
+            assert torch.equal(fused[k], v), f"strength 0 changed {k}"
+
+    def test_alpha_scales_delta(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)  # rank 2, no alpha in metadata
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+        # alpha=4, rank=2 -> scale = 2.0
+        fuse_lora(lora_p, base_p, out_p, KREA2_FAL, alpha=4.0)
+
+        lora = load_file(str(lora_p))
+        base = load_file(str(base_p))
+        fused = load_file(str(out_p))
+        key = "blocks.0.attn.wq.weight"
+        a = lora["base_model.model.blocks.0.attn.wq.lora_A.weight"]
+        b = lora["base_model.model.blocks.0.attn.wq.lora_B.weight"]
+        expected = (base[key].to(torch.float32) + 2.0 * (b.to(torch.float32) @ a.to(torch.float32))).to(base[key].dtype)
+        assert torch.equal(fused[key], expected)
+
+    def test_fp8_base_refused(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p, dtype=torch.float8_e4m3fn)
+        with pytest.raises(LoraConvertError, match="quantize"):
+            fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
+
+    def test_diffusers_named_lora_also_fuses(self, tmp_path):
+        # Convert first, then fuse from the diffusers-named file.
+        fal_p = tmp_path / "fal.safetensors"
+        make_fal_krea2_lora(fal_p)
+        conv_p = tmp_path / "conv.safetensors"
+        convert_lora_keys(fal_p, conv_p, KREA2_FAL)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+
+        res = fuse_lora(conv_p, base_p, out_p, KREA2_FAL)
+        assert res.fused == res.lora_modules and res.unmatched == []

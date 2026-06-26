@@ -5,7 +5,7 @@ from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
-from tests.conftest import make_fal_krea2_lora
+from tests.conftest import make_fal_krea2_lora, make_krea2_base
 
 runner = CliRunner()
 
@@ -91,3 +91,27 @@ class TestLoraSchemes:
         result = runner.invoke(app, ["lora", "schemes"])
         assert result.exit_code == 0, result.output
         assert "krea2" in result.output
+
+
+class TestLoraFuse:
+    def test_fuse_writes_checkpoint(self, tmp_path):
+        lora = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora)
+        base = tmp_path / "base.safetensors"
+        make_krea2_base(base)
+        out = tmp_path / "fused.safetensors"
+
+        result = runner.invoke(app, ["lora", "fuse", str(lora), str(base), "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        assert "Fused" in result.output
+
+    def test_fuse_missing_base(self, tmp_path):
+        lora = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora)
+        result = runner.invoke(app, [
+            "lora", "fuse", str(lora), str(tmp_path / "nope.safetensors"),
+            "-o", str(tmp_path / "out.safetensors"),
+        ])
+        assert result.exit_code != 0
+        assert "not found" in result.output

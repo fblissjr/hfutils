@@ -26,9 +26,11 @@ from hfutils.runner import PlanRunner
 from hfutils.formats.lora import (
     KREA2_FAL,
     LORA_SCHEMES,
+    FuseResult,
     LoraScheme,
     convert_lora_keys,
     detect_lora_scheme,
+    fuse_lora,
 )
 from hfutils.formats.safetensors import (
     Manifest,
@@ -67,6 +69,7 @@ __all__ = [
     "ConvertTarget",
     "DetectLevel",
     "EnrichedView",
+    "FuseResult",
     "GgufFileSource",
     "HfutilsError",
     "InsufficientSpaceError",
@@ -98,6 +101,7 @@ __all__ = [
     "detect_lora_scheme",
     "detect_source",
     "enrich",
+    "fuse_lora",
     "manifest_from_shards",
     "per_op_merge_observer",
     "plan_comfyui",

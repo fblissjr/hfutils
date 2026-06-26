@@ -13,6 +13,7 @@ hfutils inspect <path> --detail              # full tensor list
 
 hfutils convert <src> --to <layout> [opts]   # unified convert; --to comfyui | single
 hfutils lora convert <lora> [opts]           # rename LoRA keys for a target loader
+hfutils lora fuse <lora> <base> -o <out>     # bake a LoRA into a base checkpoint ([ml] extra)
 hfutils lora schemes                         # list LoRA conversion schemes
 hfutils civitai search|info|dl
 ```
@@ -36,7 +37,7 @@ src/hfutils/
     civitai.py            -- civitai sub-app (search, info, dl)
   formats/
     safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
-    lora.py               -- LoraScheme + LORA_SCHEMES registry + convert_lora_keys (streaming key rename)
+    lora.py               -- LoraScheme + LORA_SCHEMES registry + convert_lora_keys (streaming key rename) + fuse_lora (torch, bake into base)
   sources/
     detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView
     types.py              -- Source union + variants (PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource) + IntegrityError + display_kind()
@@ -57,7 +58,7 @@ src/hfutils/
   providers/
     civitai.py            -- CivitaiClient API client
     download.py           -- resumable download + rich progress (uses make_progress)
-tests/                    -- 237 tests, pytest (includes Hypothesis property tests for stream_merge)
+tests/                    -- 250 tests, pytest (includes Hypothesis property tests for stream_merge)
 ```
 
 ## Dev
@@ -95,7 +96,8 @@ tests/                    -- 237 tests, pytest (includes Hypothesis property tes
 - **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.
 - **Architecture detection** is table-driven (`_FAMILY_RULES`); add new architectures by adding table entries.
-- **LoRA conversion is scheme-driven** (`formats/lora.LORA_SCHEMES`). Each `LoraScheme` carries a `rename(key)->key` and a `matches(header)->bool` detector; add a new trainer->loader conversion by adding a registry entry. `convert_lora_keys` streams the data region verbatim (only the header's tensor names change) and returns a `Manifest` for `verify_output`, mirroring `stream_merge`. The `krea2` rename map inverts ComfyUI's `comfy.utils.krea2_to_diffusers` -- keep them in sync if Krea naming changes.
+- **LoRA conversion is scheme-driven** (`formats/lora.LORA_SCHEMES`). Each `LoraScheme` carries `rename(key)->key`, a `matches(header)->bool` detector, and an optional `to_base_key(module)->base weight | None` (required for `fuse`). Add a new trainer->loader conversion by adding a registry entry. `convert_lora_keys` streams the data region verbatim (only the header's tensor names change) and returns a `Manifest` for `verify_output`, mirroring `stream_merge`. The `krea2` rename map inverts ComfyUI's `comfy.utils.krea2_to_diffusers` -- keep them in sync if Krea naming changes. `matches` detects a Krea-2 LoRA in either naming (txtfusion/text_fusion + LoRA tensors), so the base checkpoint (text-fusion stack but no LoRA tensors) doesn't match.
+- **`fuse_lora` is the one torch-gated path** (`[ml]` extra): it does real tensor math (`W + (alpha/rank)*strength*B@A`), unlike the streaming key-only ops. torch is imported lazily inside the function; a clear `LoraConvertError` points at `hfutils[ml]` if it's missing. It streams the base data region tensor-by-tensor (low memory on a 26 GB base), reuses the base header verbatim (output names/shapes/dtypes == base), and refuses fp8 bases (the stored weight carries a separate scale -- fuse into bf16, then quantize).
 - **Shared formatters** in `inspect/common.py` (`format_size`, `format_params`, `QUANT_DTYPE_LABELS`, `DTYPE_SIZES`); don't duplicate.
 
 ## Gotchas

@@ -19,6 +19,7 @@ from hfutils.formats.lora import (
     LORA_SCHEMES,
     convert_lora_keys,
     detect_lora_scheme,
+    fuse_lora,
 )
 from hfutils.formats.safetensors import verify_output
 from hfutils.inspect.safetensors import read_raw_header
@@ -140,4 +141,78 @@ def convert(
     console.print(
         f"\n[green]Done.[/green] Wrote {len(manifest)} tensors to {dest}. "
         f"Drop it into ComfyUI/models/loras/ and load with the default LoRA loader."
+    )
+
+
+@lora_app.command("fuse")
+def fuse(
+    lora: Path = typer.Argument(..., help="LoRA .safetensors (source or converted naming)"),
+    base: Path = typer.Argument(..., help="Full-precision (bf16) base checkpoint .safetensors"),
+    out: Path = typer.Option(..., "--out", "-o", help="Output fused checkpoint path."),
+    scheme: str = typer.Option(
+        "auto", "--scheme",
+        help=f"Conversion scheme, or 'auto' to detect. Known: {', '.join(LORA_SCHEMES)}.",
+    ),
+    strength: float = typer.Option(1.0, "--strength", help="LoRA strength multiplier."),
+    alpha: float | None = typer.Option(
+        None, "--alpha",
+        help="Override LoRA alpha (default: from metadata, then per-module rank).",
+    ),
+) -> None:
+    """Bake a LoRA into the base checkpoint (then quantize for zero runtime cost)."""
+    for label, path in (("lora", lora), ("base", base)):
+        if not path.is_file():
+            _error(f"{label} not found: {path}")
+            raise typer.Exit(1)
+
+    try:
+        header = read_raw_header(lora)
+    except (ValueError, OSError) as e:
+        _error(f"could not read LoRA header: {e}")
+        raise typer.Exit(1)
+
+    if scheme == "auto":
+        resolved = detect_lora_scheme(header)
+        if resolved is None:
+            _error(f"could not detect a known LoRA scheme. Known: {_scheme_list()}.")
+            raise typer.Exit(1)
+    else:
+        resolved = LORA_SCHEMES.get(scheme)
+        if resolved is None:
+            _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
+            raise typer.Exit(1)
+
+    if resolved.to_base_key is None:
+        _error(f"scheme '{resolved.name}' does not support fuse.")
+        raise typer.Exit(1)
+
+    console.print(f"Scheme: [cyan]{resolved.name}[/cyan]  strength={strength}")
+    console.print(f"  lora: {lora}")
+    console.print(f"  base: {base}")
+    console.print(f"  out:  {out}")
+
+    try:
+        with make_progress(console) as progress:
+            task: dict[str, int] = {}
+
+            class _Progress:
+                def on_total(self, total_bytes: int) -> None:
+                    task["id"] = progress.add_task(f"fuse -> {out.name}", total=total_bytes)
+
+                def on_progress(self, bytes_copied: int) -> None:
+                    progress.update(task["id"], advance=bytes_copied)
+
+                def on_warning(self, message: str) -> None:
+                    console.print(f"[yellow]warn:[/yellow] {message}")
+
+            result = fuse_lora(lora, base, out, resolved, strength=strength, alpha=alpha, observer=_Progress())
+    except LoraConvertError as e:
+        _error(str(e))
+        raise typer.Exit(1)
+
+    if result.unmatched:
+        console.print(f"[yellow]{len(result.unmatched)} LoRA module(s) had no base match[/yellow] (skipped).")
+    console.print(
+        f"\n[green]Done.[/green] Fused {result.fused}/{result.lora_modules} LoRA modules "
+        f"into {out}. Quantize it for zero LoRA runtime cost."
     )

@@ -90,6 +90,26 @@ def make_fal_krea2_lora(
     return keys
 
 
+def fal_module_to_base_key(module_with_suffix: str) -> str:
+    """`base_model.model.X.lora_A.weight` -> native base weight `X.weight`."""
+    inner = module_with_suffix[len("base_model.model."):]
+    inner = inner.rsplit(".lora_", 1)[0]
+    return inner + ".weight"
+
+
+def make_krea2_base(path: Path, *, n_blocks: int = 2, dtype=torch.bfloat16) -> dict[str, "torch.Tensor"]:
+    """Write a synthetic Krea-2 base checkpoint (native names) that the LoRA from
+    `make_fal_krea2_lora` fuses into. Includes a couple of non-LoRA tensors
+    (norms) to verify they pass through unchanged. Returns the tensor dict."""
+    base_keys = {fal_module_to_base_key(k) for k in fal_krea2_lora_keys(n_blocks)}
+    tensors = {k: torch.randn(2, 2).to(dtype) for k in base_keys}
+    # Non-LoRA weights the fuse must copy verbatim.
+    for i in range(n_blocks):
+        tensors[f"blocks.{i}.prenorm.scale"] = torch.randn(2).to(dtype)
+    save_file(tensors, path)
+    return tensors
+
+
 def make_diffusers_pipeline(tmp: Path) -> None:
     """Create a diffusers pipeline dir with transformer (sharded), vae, text_encoder.
 

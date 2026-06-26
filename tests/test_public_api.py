@@ -58,3 +58,9 @@ def test_lora_convert_exported():
     assert hfutils.KREA2_FAL.name == "krea2"
     assert hfutils.LoraScheme is not None
     assert issubclass(hfutils.LoraConvertError, hfutils.HfutilsError)
+
+
+def test_lora_fuse_exported():
+    assert callable(hfutils.fuse_lora)
+    assert hfutils.FuseResult is not None
+    assert callable(hfutils.KREA2_FAL.to_base_key)
