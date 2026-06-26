@@ -14,6 +14,7 @@
 ### Medium
 
 - **Error hierarchy** gains `LoraConvertError` (key collision / unexpected EOF during a LoRA convert).
+- **`RichMergeObserver`** (`hfutils.events`): a merge-scope rich-progress observer (the counterpart to `RichObserver`), so single-file streaming ops get CLI progress without a hand-rolled observer.
 
 ### Notes
 
