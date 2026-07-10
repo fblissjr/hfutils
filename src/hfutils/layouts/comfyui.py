@@ -113,7 +113,18 @@ def _copy_integrity_problem(shards: list[Path]) -> str | None:
 
 def _source_problem(src: ComponentSource) -> str | None:
     """Human-readable reason this source shouldn't be packed, or None if
-    it's fine."""
+    it's fine.
+
+    Scope, matching what `--force` can and can't bypass: missing shards
+    (`incomplete`) and a truncated single-file component
+    (`_copy_integrity_problem`) are both caught here, pre-write, and
+    `--force` can knowingly override either. A shard that's *present but
+    corrupted within a multi-shard set* is a different case entirely --
+    it's caught by `stream_merge`'s own EOF check during the actual merge
+    (a `StreamMergeError`, unaffected by `--force`), not here, since
+    checking every shard's declared-vs-actual size at plan time would mean
+    a per-shard header read for every shard in every merge, not just the
+    single file actually at risk in the copy-kind case above."""
     if src.integrity_error is not None:
         return str(src.integrity_error)
     if src.incomplete:
