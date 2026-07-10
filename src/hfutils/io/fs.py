@@ -22,11 +22,14 @@ def resolve_existing_ancestor(path: Path) -> Path | None:
     return probe
 
 
-def check_free_space(dest: Path, required: int) -> None:
+def check_free_space(dest: Path, required: int, *, label: str | None = None) -> None:
     """Raise `InsufficientSpaceError` if `dest`'s filesystem can't hold `required` bytes.
 
     Resolves to the nearest existing ancestor when `dest` itself doesn't exist
-    (common case: the output directory hasn't been created yet).
+    (common case: the output directory hasn't been created yet). The error
+    message names `label` instead of `dest` when given -- useful when a
+    caller has grouped several destinations onto one filesystem device and
+    `dest` is just one representative probe path, not the full picture.
     """
     probe = resolve_existing_ancestor(dest)
     if probe is None:
@@ -35,6 +38,6 @@ def check_free_space(dest: Path, required: int) -> None:
     free = shutil.disk_usage(probe).free
     if free < required:
         raise InsufficientSpaceError(
-            f"Not enough free space at {dest}: "
+            f"Not enough free space at {label if label is not None else dest}: "
             f"need {format_size(required)}, have {format_size(free)}."
         )

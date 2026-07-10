@@ -65,6 +65,7 @@ def _preflight_space(ops: list[PackOp]) -> None:
     try/except needed."""
     by_device: dict[int, int] = defaultdict(int)
     device_probe: dict[int, Path] = {}
+    device_dests: dict[int, list[Path]] = defaultdict(list)
     for op in ops:
         probe = resolve_existing_ancestor(op.dest.parent)
         if probe is None:
@@ -72,8 +73,10 @@ def _preflight_space(ops: list[PackOp]) -> None:
         dev = probe.stat().st_dev
         by_device[dev] += op.total_bytes
         device_probe[dev] = probe
+        device_dests[dev].append(op.dest.parent)
     for dev, required in by_device.items():
-        check_free_space(device_probe[dev], required)
+        label = ", ".join(str(p) for p in sorted(set(device_dests[dev]), key=str))
+        check_free_space(device_probe[dev], required, label=label)
 
 
 def _print_plan(plan: PackPlan, dry_run: bool) -> None:

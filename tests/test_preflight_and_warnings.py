@@ -45,7 +45,7 @@ class TestDiskSpaceCheck:
         src = tmp_path / "in.safetensors"
         save_file({"w": torch.randn(2, 2)}, src)
 
-        def _fake_check(dest, required):
+        def _fake_check(dest, required, **kwargs):
             raise InsufficientSpaceError(f"mocked: cannot fit {required} bytes")
 
         with patch("hfutils.commands.convert.check_free_space", _fake_check):
@@ -92,6 +92,27 @@ class TestDiskSpaceGrouping:
         with patch("hfutils.io.fs.shutil.disk_usage") as mock_disk_usage:
             mock_disk_usage.return_value.free = 20
             _preflight_space(ops)  # must not raise
+
+    def test_failure_message_names_every_destination_sharing_the_device(self, tmp_path):
+        """The old per-parent grouping named the exact folder that needed
+        space; device-grouping must not regress to naming one arbitrary
+        ancestor while silently dropping the other destination(s) that
+        contributed to the shortfall."""
+        ops = [
+            self._op(tmp_path / "diffusion_models" / "x.safetensors", 15),
+            self._op(tmp_path / "vae" / "x_vae.safetensors", 3),
+            self._op(tmp_path / "text_encoders" / "x_te.safetensors", 4),
+        ]
+
+        with patch("hfutils.io.fs.shutil.disk_usage") as mock_disk_usage:
+            mock_disk_usage.return_value.free = 20
+            with pytest.raises(InsufficientSpaceError) as exc_info:
+                _preflight_space(ops)
+
+        message = str(exc_info.value)
+        assert "diffusion_models" in message
+        assert "vae" in message
+        assert "text_encoders" in message
 
 
 class TestMetadataWarnings:
