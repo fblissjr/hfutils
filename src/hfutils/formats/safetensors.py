@@ -150,7 +150,8 @@ def stream_merge(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with unlink_on_error(output_path), open(output_path, "wb") as out:
+    with unlink_on_error(output_path) as mark_started, open(output_path, "wb") as out:
+        mark_started()
         out.write(struct.pack("<Q", len(header_bytes)))
         out.write(header_bytes)
 

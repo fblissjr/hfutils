@@ -356,6 +356,28 @@ class TestFuseLora:
         with pytest.raises(LoraConvertError):
             fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
 
+    def test_corrupt_base_does_not_delete_pre_existing_output(self, tmp_path):
+        """safe_open(base_path) fails before out_path is ever opened in
+        fuse_lora's combined `with` statement -- a pre-existing, unrelated
+        file already sitting at out_path (e.g. a valid fuse from an earlier
+        run) must survive this failure untouched, not get deleted by
+        unlink_on_error for a run that never wrote a byte to it."""
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        size = base_p.stat().st_size
+        with open(base_p, "r+b") as f:
+            f.truncate(size - 20)
+        out_p = tmp_path / "fused.safetensors"
+        out_p.write_bytes(b"pre-existing valid fused checkpoint from an earlier run")
+
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, base_p, out_p, KREA2_FAL)
+
+        assert out_p.exists()
+        assert out_p.read_bytes() == b"pre-existing valid fused checkpoint from an earlier run"
+
     def test_malformed_lora_header_raises_loraconverterror(self, tmp_path):
         bad = tmp_path / "bad.safetensors"
         bad.write_bytes(b"\x00\x00\x00")

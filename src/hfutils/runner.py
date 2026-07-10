@@ -13,7 +13,7 @@ from hfutils.formats.safetensors import (
     manifest_from_shards,
     stream_merge,
 )
-from hfutils.io.progress import copy_chunks
+from hfutils.io.progress import copy_chunks, unlink_on_error
 from hfutils.layouts.plan import PackPlan
 
 
@@ -72,10 +72,12 @@ class PlanRunner:
 
                 if op.kind == "copy":
                     src = op.shards[0]
-                    copy_chunks(
-                        src, op.dest,
-                        on_chunk=lambda n, op=op: self.observer.on_op_progress(op, n),
-                    )
+                    with unlink_on_error(op.dest) as mark_started:
+                        copy_chunks(
+                            src, op.dest,
+                            on_chunk=lambda n, op=op: self.observer.on_op_progress(op, n),
+                            on_open=mark_started,
+                        )
                     manifest = manifest_from_shards([src])
                 else:
                     manifest = stream_merge(

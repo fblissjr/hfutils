@@ -155,6 +155,26 @@ class TestPlanRunner:
         assert obs.plans_started == []
         assert not (tmp_path / "out.safetensors").exists()
 
+    def test_copy_branch_cleans_up_partial_output_on_failure(self, tmp_path):
+        """Unlike the merge branch (stream_merge, self-cleaning via
+        unlink_on_error), the copy branch (single-shard ops, copy_chunks)
+        used to leave a partial file behind on a mid-copy failure with no
+        cleanup at all."""
+        src = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(2, 2)}, src)
+        out = tmp_path / "out.safetensors"
+        plan = plan_single(detect_source(src), out)
+
+        class ExplodingProgressObserver(CollectingObserver):
+            def on_op_progress(self, op, bytes_copied):
+                super().on_op_progress(op, bytes_copied)
+                raise RuntimeError("boom mid-copy")
+
+        with pytest.raises(RuntimeError):
+            PlanRunner(observer=ExplodingProgressObserver()).run(plan)
+
+        assert not out.exists()
+
     def test_force_writes_plan_with_missing_components(self, tmp_path):
         shard = tmp_path / "in.safetensors"
         save_file({"w": torch.randn(2, 2)}, shard)

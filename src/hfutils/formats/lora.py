@@ -239,7 +239,9 @@ def convert_lora_keys(
     obs.on_total(data_total)
 
     dst_path.parent.mkdir(parents=True, exist_ok=True)
-    with unlink_on_error(dst_path), open(src_path, "rb") as fin, open(dst_path, "wb") as fout:
+    with unlink_on_error(dst_path) as mark_started, \
+            open(src_path, "rb") as fin, open(dst_path, "wb") as fout:
+        mark_started()
         fout.write(struct.pack("<Q", len(header_bytes)))
         fout.write(header_bytes)
         fin.seek(raw.data_region_start)
@@ -355,9 +357,10 @@ def fuse_lora(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with unlink_on_error(out_path), \
+        with unlink_on_error(out_path) as mark_started, \
                 safe_open(base_path, framework="pt") as bf, \
                 open(base_path, "rb") as raw_in, open(out_path, "wb") as out:
+            mark_started()
             # Output header == base header verbatim (names/shapes/dtypes/offsets unchanged).
             header_bytes = raw_in.read(8 + base_raw.header_length)[8:]
             out.write(struct.pack("<Q", base_raw.header_length))

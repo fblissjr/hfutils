@@ -31,11 +31,16 @@ def make_progress(console: Console) -> Progress:
 def copy_chunks(
     src: Path, dst: Path,
     on_chunk: Callable[[int], None] | None = None,
+    on_open: Callable[[], None] | None = None,
 ) -> None:
-    """Chunked byte-for-byte file copy. Calls `on_chunk(bytes_written)` after
-    each write when provided. Single source of truth for the copy loop;
-    `copy_with_progress` (rich) and `runner.PlanRunner` (Observer) both use it."""
+    """Chunked byte-for-byte file copy. Calls `on_open()` once both files are
+    open (dst truncated) -- e.g. to arm a `unlink_on_error` cleanup only
+    once writing has actually begun -- then `on_chunk(bytes_written)` after
+    each write. Single source of truth for the copy loop; `copy_with_progress`
+    (rich) and `runner.PlanRunner` (Observer) both use it."""
     with open(src, "rb") as fi, open(dst, "wb") as fo:
+        if on_open is not None:
+            on_open()
         while True:
             chunk = fi.read(COPY_CHUNK)
             if not chunk:
@@ -76,14 +81,27 @@ def stream_region(
 
 
 @contextlib.contextmanager
-def unlink_on_error(path: Path) -> Iterator[None]:
-    """Delete `path` if an exception escapes the block; no-op on success.
+def unlink_on_error(path: Path) -> Iterator[Callable[[], None]]:
+    """Delete `path` if an exception escapes the block *after* the yielded
+    `mark_started()` callable has been called; no-op on success.
 
     Guards against leaving a truncated-but-header-valid file behind when a
     streaming write (stream_merge, convert_lora_keys, fuse_lora) fails
-    partway through."""
+    partway through -- but only once this run has actually begun writing.
+    Call `mark_started()` right after the destination is opened for writing
+    (truncating it). A failure *before* that point (e.g. a prerequisite
+    input file failing to open earlier in the same `with` statement) never
+    touched `path`, so it must not delete a pre-existing, unrelated file
+    that happened to already be sitting there."""
+    started = False
+
+    def mark_started() -> None:
+        nonlocal started
+        started = True
+
     try:
-        yield
+        yield mark_started
     except BaseException:
-        path.unlink(missing_ok=True)
+        if started:
+            path.unlink(missing_ok=True)
         raise
