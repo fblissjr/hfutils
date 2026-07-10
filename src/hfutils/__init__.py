@@ -8,9 +8,7 @@ from hfutils.errors import (
     InsufficientSpaceError,
     LoraConvertError,
     PlanError,
-    SourceError,
     StreamMergeError,
-    VerificationError,
 )
 from hfutils.events import (
     CollectingMergeObserver,
@@ -93,10 +91,8 @@ __all__ = [
     "RichMergeObserver",
     "SafetensorsFileSource",
     "Source",
-    "SourceError",
     "StreamMergeError",
     "UnknownSource",
-    "VerificationError",
     "__version__",
     "convert_lora_keys",
     "detect_lora_scheme",

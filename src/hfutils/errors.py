@@ -9,10 +9,6 @@ class HfutilsError(Exception):
     """Base for every error hfutils raises."""
 
 
-class SourceError(HfutilsError):
-    """Failure while classifying or validating a source path."""
-
-
 class PlanError(HfutilsError):
     """Failure while building a PackPlan (e.g. missing --as, unknown target)."""
 
@@ -23,10 +19,6 @@ class StreamMergeError(HfutilsError):
 
 class LoraConvertError(HfutilsError):
     """Failure during a LoRA key-scheme conversion (key collision, unexpected EOF)."""
-
-
-class VerificationError(HfutilsError):
-    """Post-merge --verify found a mismatch between plan and output."""
 
 
 class InsufficientSpaceError(HfutilsError):
