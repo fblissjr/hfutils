@@ -90,8 +90,8 @@ def _print_op_preview(op: PackOp) -> None:
         console.print(line)
 
 
-def _run_plan(plan: PackPlan) -> dict[Path, Manifest]:
-    return PlanRunner(RichObserver(console)).run(plan)
+def _run_plan(plan: PackPlan, *, force: bool = False) -> dict[Path, Manifest]:
+    return PlanRunner(RichObserver(console)).run(plan, force=force)
 
 
 def _default_name(source: Source) -> str:
@@ -197,6 +197,10 @@ def convert(
     # Shared
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
     verify: bool = typer.Option(False, "--verify", help="Re-read each output and confirm it matches the plan"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Write even if a source is incomplete/corrupt (still warns; refused by default).",
+    ),
 ) -> None:
     """Convert a local model. `--to` picks the target layout."""
     src = detect_source(source)
@@ -227,7 +231,7 @@ def convert(
         return
 
     _preflight_space(plan.ops)
-    manifests = _run_plan(plan)
+    manifests = _run_plan(plan, force=force)
 
     if verify:
         results = [verify_and_report(op.dest, manifests[op.dest]) for op in plan.ops]

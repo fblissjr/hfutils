@@ -113,3 +113,27 @@ class TestPlanRunner:
 
         assert obs.plans_started == []
         assert not (tmp_path / "out.safetensors").exists()
+
+    def test_force_proceeds_with_a_warning(self, tmp_path):
+        """force=True is an explicit opt-in to write a known-broken source
+        anyway -- it must still warn (not vanish silently), and must
+        actually write the file."""
+        shard = tmp_path / "in.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        out = tmp_path / "out.safetensors"
+        broken_op = PackOp(
+            label="transformer", source=tmp_path, dest=out,
+            shards=[shard], problem="incomplete: missing shard(s) per index.json",
+        )
+        plan = PackPlan(ops=[broken_op], source=detect_source(tmp_path))
+        obs = CollectingObserver()
+
+        manifests = PlanRunner(observer=obs).run(plan, force=True)
+
+        assert out.exists()
+        assert out in manifests
+        assert obs.plans_started == [plan]
+        assert any(
+            op is broken_op and "incomplete" in message
+            for op, message in obs.warnings
+        )

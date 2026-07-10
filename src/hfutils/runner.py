@@ -31,7 +31,7 @@ class PlanRunner:
     def __init__(self, observer: Observer | None = None) -> None:
         self.observer: Observer = observer if observer is not None else NullObserver()
 
-    def run(self, plan: PackPlan) -> dict[Path, Manifest]:
+    def run(self, plan: PackPlan, *, force: bool = False) -> dict[Path, Manifest]:
         """Execute every op, return {dest: Manifest}. Raises StreamMergeError
         / OSError / etc. on failure -- caller handles user-facing messaging.
 
@@ -40,17 +40,23 @@ class PlanRunner:
         present would silently produce a syntactically valid but
         semantically broken output with no exception to catch it later.
 
+        `force=True` is an explicit opt-in to write the broken op(s) anyway;
+        each one is still reported via `on_op_warning` before execution, so
+        overriding the safety net is never silent.
+
         `on_plan_complete` is invoked in a finally, so observers that hold
         resources (e.g. RichObserver owns a rich Progress context) tear down
         cleanly even if an op raises partway through."""
         broken = plan.broken_ops()
-        if broken:
+        if broken and not force:
             details = "; ".join(f"{op.label}: {op.problem}" for op in broken)
             raise PlanError(f"refusing to write incomplete/corrupt source(s): {details}")
 
         self.observer.on_plan_start(plan)
         manifests: dict[Path, Manifest] = {}
         try:
+            for op in broken:
+                self.observer.on_op_warning(op, f"proceeding despite: {op.problem} (--force)")
             for op in plan.ops:
                 op.dest.parent.mkdir(parents=True, exist_ok=True)
                 self.observer.on_op_start(op, op.total_bytes)

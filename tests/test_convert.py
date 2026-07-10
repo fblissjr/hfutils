@@ -257,6 +257,24 @@ class TestConvertErrorHandling:
         assert "incomplete" in result.output.lower()
         assert not comfy.exists()
 
+    def test_incomplete_pipeline_component_force_writes_with_warning(self, tmp_path):
+        """--force is an explicit opt-in to convert a known-incomplete
+        source anyway -- it must still write, and still warn, not proceed
+        silently."""
+        _make_pipeline(tmp_path)
+        shard = tmp_path / "transformer" / "diffusion_pytorch_model-00002-of-00002.safetensors"
+        shard.unlink()
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--force",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "incomplete" in result.output.lower()
+        assert (comfy / "diffusion_models/X.safetensors").exists()
+
 
 class TestConvertValidation:
     def test_unrecognized_source(self, tmp_path):
