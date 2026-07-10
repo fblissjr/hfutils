@@ -5,6 +5,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from hfutils.errors import LoraConvertError
+from hfutils.events import CollectingMergeObserver
 from hfutils.formats.lora import (
     KREA2_FAL,
     LORA_SCHEMES,
@@ -185,6 +186,26 @@ class TestConvertLoraKeys:
         assert obs.total == data_total
         assert obs.advanced == data_total
 
+    def test_cleans_up_partial_output_on_failure(self, tmp_path, monkeypatch):
+        """A mid-copy failure must not leave a truncated-but-header-valid
+        file behind at the destination. convert_lora_keys derives its copy
+        size from a live stat() of the source, so pre-truncating the source
+        can't induce a mismatch -- monkeypatch the shared copy primitive
+        instead to simulate a failure partway through."""
+        src = tmp_path / "fal.safetensors"
+        make_fal_krea2_lora(src)
+        dst = tmp_path / "out.safetensors"
+
+        def _boom(*args, **kwargs):
+            raise LoraConvertError("simulated failure")
+
+        monkeypatch.setattr("hfutils.formats.lora.stream_region", _boom)
+
+        with pytest.raises(LoraConvertError):
+            convert_lora_keys(src, dst, KREA2_FAL)
+
+        assert not dst.exists()
+
     def test_collision_raises(self, tmp_path):
         # A degenerate scheme that collapses two distinct keys onto one target.
         src = tmp_path / "two.safetensors"
@@ -299,6 +320,28 @@ class TestFuseLora:
         with pytest.raises(LoraConvertError, match="quantize"):
             fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
 
+    def test_cleans_up_partial_output_on_failure(self, tmp_path, monkeypatch):
+        """A mid-copy failure must not leave a truncated-but-header-valid
+        file behind. `prenorm.scale` (the only non-LoRA-targeted tensor in
+        the fixture) always goes through the verbatim-copy branch, so
+        monkeypatching the shared copy primitive triggers deterministically
+        regardless of on-disk tensor order."""
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+
+        def _boom(*args, **kwargs):
+            raise LoraConvertError("simulated failure")
+
+        monkeypatch.setattr("hfutils.formats.lora.stream_region", _boom)
+
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, base_p, out_p, KREA2_FAL)
+
+        assert not out_p.exists()
+
     def test_diffusers_named_lora_also_fuses(self, tmp_path):
         # Convert first, then fuse from the diffusers-named file.
         fal_p = tmp_path / "fal.safetensors"
@@ -311,3 +354,48 @@ class TestFuseLora:
 
         res = fuse_lora(conv_p, base_p, out_p, KREA2_FAL)
         assert res.fused == res.lora_modules and res.unmatched == []
+
+    def test_single_sided_module_warns_and_is_skipped(self, tmp_path):
+        """A module with a base key match but only one of lora_A/lora_B present
+        (malformed/truncated LoRA export) must not vanish silently -- it should
+        warn and be skipped, not crash and not be counted as fused."""
+        lora_p = tmp_path / "lora.safetensors"
+        save_file(
+            {
+                "base_model.model.blocks.0.attn.wq.lora_A.weight": torch.randn(2, 2),
+                "base_model.model.blocks.0.attn.wq.lora_B.weight": torch.randn(2, 2),
+                # wk has a base match but only the A factor -- no B.
+                "base_model.model.blocks.0.attn.wk.lora_A.weight": torch.randn(2, 2),
+            },
+            lora_p,
+        )
+        base_p = tmp_path / "base.safetensors"
+        base = make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+        obs = CollectingMergeObserver()
+
+        res = fuse_lora(lora_p, base_p, out_p, KREA2_FAL, observer=obs)
+
+        assert res.fused == 1
+        assert any("wk" in w for w in obs.warnings)
+
+        fused = load_file(str(out_p))
+        assert torch.equal(fused["blocks.0.attn.wk.weight"], base["blocks.0.attn.wk.weight"])
+
+    def test_mismatched_ab_shapes_raise_loraconverterror(self, tmp_path):
+        """A/B factors with incompatible inner dimensions must raise
+        LoraConvertError, not a raw torch error from an unchecked matmul."""
+        lora_p = tmp_path / "lora.safetensors"
+        save_file(
+            {
+                "base_model.model.blocks.0.attn.wq.lora_A.weight": torch.randn(2, 2),
+                "base_model.model.blocks.0.attn.wq.lora_B.weight": torch.randn(2, 5),  # rank mismatch
+            },
+            lora_p,
+        )
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        out_p = tmp_path / "fused.safetensors"
+
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, base_p, out_p, KREA2_FAL)

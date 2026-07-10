@@ -38,24 +38,7 @@ from hfutils.events import MergeObserver, NullMergeObserver
 from hfutils.formats.safetensors import Manifest
 from hfutils.inspect.common import QUANT_DTYPE_LABELS
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
-from hfutils.io.progress import COPY_CHUNK
-
-
-def _stream_region(fin, fout, size: int, src_path: Path, on_chunk=None) -> None:
-    """Copy `size` bytes from `fin`'s current position to `fout` in COPY_CHUNK
-    blocks, raising `LoraConvertError` on a short read. `on_chunk(n)` fires per
-    block when given. Shared by the streaming write paths below."""
-    remaining = size
-    while remaining > 0:
-        chunk = fin.read(min(COPY_CHUNK, remaining))
-        if not chunk:
-            raise LoraConvertError(
-                f"Unexpected EOF reading {src_path} ({remaining} bytes remaining)"
-            )
-        fout.write(chunk)
-        remaining -= len(chunk)
-        if on_chunk is not None:
-            on_chunk(len(chunk))
+from hfutils.io.progress import stream_region, unlink_on_error
 
 
 @dataclass(frozen=True)
@@ -243,11 +226,14 @@ def convert_lora_keys(
     obs.on_total(data_total)
 
     dst_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(src_path, "rb") as fin, open(dst_path, "wb") as fout:
+    with unlink_on_error(dst_path), open(src_path, "rb") as fin, open(dst_path, "wb") as fout:
         fout.write(struct.pack("<Q", len(header_bytes)))
         fout.write(header_bytes)
         fin.seek(raw.data_region_start)
-        _stream_region(fin, fout, data_total, src_path, on_chunk=obs.on_progress)
+        stream_region(
+            fin, fout, data_total,
+            src_desc=str(src_path), on_chunk=obs.on_progress, error_cls=LoraConvertError,
+        )
 
     return manifest
 
@@ -341,13 +327,19 @@ def fuse_lora(
 
     unmatched = sorted(k for k in modules if k not in base_names)
     fuseable = {k: v for k, v in modules.items() if k in base_names and "A" in v and "B" in v}
+    partial = sorted(
+        k for k in modules if k in base_names and not ("A" in modules[k] and "B" in modules[k])
+    )
 
     obs.on_total(base_path.stat().st_size - base_raw.data_region_start)
     for k in unmatched:
         obs.on_warning(f"LoRA targets '{k}' which is absent from the base; skipped")
+    for k in partial:
+        obs.on_warning(f"LoRA module for '{k}' is missing its A or B factor; skipped")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with safe_open(base_path, framework="pt") as bf, \
+    with unlink_on_error(out_path), \
+            safe_open(base_path, framework="pt") as bf, \
             open(base_path, "rb") as raw_in, open(out_path, "wb") as out:
         # Output header == base header verbatim (names/shapes/dtypes/offsets unchanged).
         header_bytes = raw_in.read(8 + base_raw.header_length)[8:]
@@ -366,6 +358,11 @@ def fuse_lora(
                 w = bf.get_tensor(entry.name)
                 a, b = fuseable[entry.name]["A"], fuseable[entry.name]["B"]
                 rank = a.shape[0]
+                if rank == 0 or b.shape[-1] != rank:
+                    raise LoraConvertError(
+                        f"'{entry.name}': incompatible LoRA factor shapes "
+                        f"A={tuple(a.shape)} B={tuple(b.shape)}"
+                    )
                 scale = (alpha / rank if alpha is not None else 1.0) * strength
                 delta = torch.matmul(b.to(torch.float32), a.to(torch.float32)) * scale
                 if delta.shape != tuple(w.shape):
@@ -378,7 +375,7 @@ def fuse_lora(
                 fused += 1
             else:
                 raw_in.seek(base_raw.data_region_start + entry.data_offset_start)
-                _stream_region(raw_in, out, size, base_path)
+                stream_region(raw_in, out, size, src_desc=str(base_path), error_cls=LoraConvertError)
             obs.on_progress(size)
 
     return FuseResult(fused=fused, lora_modules=len(modules), unmatched=unmatched)

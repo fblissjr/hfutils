@@ -107,6 +107,26 @@ class TestStreamMerge:
             cursor = entry.data_offset_end
         assert cursor == total_data
 
+    def test_cleans_up_partial_output_on_failure(self, tmp_path):
+        """A mid-copy failure (e.g. a shard truncated after the header was
+        read) must not leave a truncated-but-header-valid file at the
+        destination -- it should be removed, not left behind."""
+        t1 = {"a": torch.randn(4, 4)}
+        t2 = {"b": torch.randn(8, 8)}
+        shards = _write_shards(tmp_path, [t1, t2])
+        # Truncate the second shard's trailing bytes -- its header still
+        # declares the original (larger) tensor data size.
+        second = shards[1]
+        size = second.stat().st_size
+        with open(second, "r+b") as f:
+            f.truncate(size - 10)
+
+        out = tmp_path / "merged.safetensors"
+        with pytest.raises(StreamMergeError):
+            stream_merge(shards, out)
+
+        assert not out.exists()
+
     def test_peak_python_allocations_bounded(self, tmp_path):
         # Stream-merging a 64 MiB shard must not trigger Python allocations
         # anywhere near the tensor size. tracemalloc scopes to Python heap

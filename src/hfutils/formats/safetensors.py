@@ -21,7 +21,7 @@ import orjson
 from hfutils.errors import StreamMergeError
 from hfutils.events import MergeObserver, NullMergeObserver
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
-from hfutils.io.progress import COPY_CHUNK
+from hfutils.io.progress import stream_region, unlink_on_error
 
 # os.copy_file_range was benchmarked and rejected (disk-write-bound, not
 # user-space-bound). See internal/log/log_2026-04-19.md for numbers.
@@ -141,7 +141,7 @@ def stream_merge(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as out:
+    with unlink_on_error(output_path), open(output_path, "wb") as out:
         out.write(struct.pack("<Q", len(header_bytes)))
         out.write(header_bytes)
 
@@ -150,17 +150,11 @@ def stream_merge(
         for shard_path, src_offset, size, _dst_offset in plan:
             with open(shard_path, "rb") as src:
                 src.seek(src_offset)
-                remaining = size
-                while remaining > 0:
-                    chunk = src.read(min(COPY_CHUNK, remaining))
-                    if not chunk:
-                        raise StreamMergeError(
-                            f"Unexpected EOF reading {shard_path} "
-                            f"({remaining} bytes remaining)"
-                        )
-                    out.write(chunk)
-                    remaining -= len(chunk)
-                    obs.on_progress(len(chunk))
+                stream_region(
+                    src, out, size,
+                    src_desc=str(shard_path), on_chunk=obs.on_progress,
+                    error_cls=StreamMergeError,
+                )
 
     return manifest
 

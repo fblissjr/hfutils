@@ -1,6 +1,7 @@
 """Shared rich progress helpers used by merge, copy, and pack commands."""
 
-from collections.abc import Callable
+import contextlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from rich.console import Console
@@ -50,3 +51,39 @@ def copy_with_progress(src: Path, dst: Path, console: Console) -> None:
     with make_progress(console) as progress:
         task = progress.add_task(f"copy {src.name}", total=total)
         copy_chunks(src, dst, on_chunk=lambda n: progress.update(task, advance=n))
+
+
+def stream_region(
+    fin, fout, size: int, *,
+    src_desc: str,
+    on_chunk: Callable[[int], None] | None = None,
+    error_cls: type[Exception] = OSError,
+) -> None:
+    """Copy `size` bytes from `fin`'s current position to `fout` in COPY_CHUNK
+    blocks, raising `error_cls` on a short read. `on_chunk(n)` fires per block
+    when given. Shared bounded-copy primitive for callers that read from a
+    seek offset rather than a whole file (`io/progress.copy_chunks` is
+    EOF-only, from offset 0)."""
+    remaining = size
+    while remaining > 0:
+        chunk = fin.read(min(COPY_CHUNK, remaining))
+        if not chunk:
+            raise error_cls(f"Unexpected EOF reading {src_desc} ({remaining} bytes remaining)")
+        fout.write(chunk)
+        remaining -= len(chunk)
+        if on_chunk is not None:
+            on_chunk(len(chunk))
+
+
+@contextlib.contextmanager
+def unlink_on_error(path: Path) -> Iterator[None]:
+    """Delete `path` if an exception escapes the block; no-op on success.
+
+    Guards against leaving a truncated-but-header-valid file behind when a
+    streaming write (stream_merge, convert_lora_keys, fuse_lora) fails
+    partway through."""
+    try:
+        yield
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
