@@ -238,6 +238,25 @@ class TestConvertErrorHandling:
         assert result.exit_code == 2
         assert result.output.count("forced mismatch") >= 2
 
+    def test_incomplete_pipeline_component_refuses_to_write(self, tmp_path):
+        """The most severe finding: converting a pipeline with an
+        interrupted download (one shard missing, index.json present) must
+        refuse cleanly, not silently merge what's present into a
+        syntactically valid but incomplete output."""
+        _make_pipeline(tmp_path)
+        shard = tmp_path / "transformer" / "diffusion_pytorch_model-00002-of-00002.safetensors"
+        shard.unlink()
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X",
+        ])
+
+        assert result.exit_code == 1
+        assert "incomplete" in result.output.lower()
+        assert not comfy.exists()
+
 
 class TestConvertValidation:
     def test_unrecognized_source(self, tmp_path):

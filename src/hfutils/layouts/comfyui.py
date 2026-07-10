@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from hfutils.errors import PlanError
+from hfutils.sources.detect import detect_source
 from hfutils.sources.types import (
     ComponentSource,
     PipelineSource,
@@ -63,6 +64,7 @@ class PackOp:
     dest: Path                          # absolute output file
     source: Path                        # user-visible source (dir or file); display only
     shards: list[Path] = field(default_factory=list)  # one entry => copy; many => merge
+    problem: str | None = None          # set if the source is incomplete/corrupt; PlanRunner refuses to write
 
     @property
     def kind(self) -> OpKind:
@@ -92,20 +94,35 @@ def _target_dest(target: ConvertTarget, comfyui_root: Path, name: str) -> Path:
     return comfyui_root / folder / f"{name}.safetensors"
 
 
+def _source_problem(src: ComponentSource) -> str | None:
+    """Human-readable reason this source shouldn't be packed, or None if
+    it's fine. Checked at BASIC detect level only (missing-shard detection
+    via index.json) -- not FULL-level integrity (truncated-but-present
+    shards already raise StreamMergeError mid-copy, so BASIC's cheap
+    missing-shard check is the only thing that can catch a shard that's
+    entirely absent)."""
+    if src.integrity_error is not None:
+        return str(src.integrity_error)
+    if src.incomplete:
+        return "incomplete: shard(s) missing per index.json"
+    return None
+
+
 def _plan_component(
     source: PipelineSource, component: str, comfyui_root: Path, name: str,
 ) -> PackOp | None:
     """Returns None if the component subdir has no safetensors (e.g. legacy
     .bin-only components in a mixed pipeline). Callers filter None out."""
     subdir = source.path / component
-    shards = sorted(subdir.glob("*.safetensors"))
-    if not shards:
+    sub_source = detect_source(subdir)
+    if not isinstance(sub_source, ComponentSource) or not sub_source.shards:
         return None
     return PackOp(
         label=component,
         source=subdir,
-        shards=shards,
+        shards=sub_source.shards,
         dest=_component_dest(component, comfyui_root, name),
+        problem=_source_problem(sub_source),
     )
 
 
@@ -152,6 +169,7 @@ def plan_comfyui(
                 ops=[PackOp(
                     label="single", source=p, shards=list(shards),
                     dest=_target_dest(target, comfyui_root, name),
+                    problem=_source_problem(source),
                 )],
                 source=source,
                 meta={"target": "comfyui"},
@@ -186,7 +204,10 @@ def plan_single(source: Source, output: Path) -> "PackPlan":
 
     match source:
         case ComponentSource(path=p, shards=shards):
-            op = PackOp(label="single", source=p, shards=list(shards), dest=output)
+            op = PackOp(
+                label="single", source=p, shards=list(shards), dest=output,
+                problem=_source_problem(source),
+            )
         case SafetensorsFileSource(path=p):
             op = PackOp(label="single", source=p, shards=[p], dest=output)
         case _:

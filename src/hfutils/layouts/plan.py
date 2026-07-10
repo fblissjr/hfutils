@@ -39,6 +39,13 @@ class PackPlan:
             seen_dests.add(op.dest)
         return problems
 
+    def broken_ops(self) -> list[PackOp]:
+        """Ops whose source is incomplete/corrupt (op.problem is set).
+
+        Unlike validate()'s advisory problems, these are a hard stop --
+        PlanRunner refuses to run a plan containing any."""
+        return [op for op in self.ops if op.problem]
+
     def __len__(self) -> int:
         return len(self.ops)
 

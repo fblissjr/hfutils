@@ -6,6 +6,7 @@ The CLI wraps this with a RichObserver; library consumers pass NullObserver
 
 from pathlib import Path
 
+from hfutils.errors import PlanError
 from hfutils.events import NullObserver, Observer, per_op_merge_observer
 from hfutils.formats.safetensors import (
     Manifest,
@@ -34,9 +35,19 @@ class PlanRunner:
         """Execute every op, return {dest: Manifest}. Raises StreamMergeError
         / OSError / etc. on failure -- caller handles user-facing messaging.
 
+        Raises `PlanError` before anything runs (not even `on_plan_start`) if
+        any op is incomplete/corrupt (`plan.broken_ops()`) -- writing what's
+        present would silently produce a syntactically valid but
+        semantically broken output with no exception to catch it later.
+
         `on_plan_complete` is invoked in a finally, so observers that hold
         resources (e.g. RichObserver owns a rich Progress context) tear down
         cleanly even if an op raises partway through."""
+        broken = plan.broken_ops()
+        if broken:
+            details = "; ".join(f"{op.label}: {op.problem}" for op in broken)
+            raise PlanError(f"refusing to write incomplete/corrupt source(s): {details}")
+
         self.observer.on_plan_start(plan)
         manifests: dict[Path, Manifest] = {}
         try:

@@ -1,10 +1,13 @@
 """PlanRunner: executes a PackPlan, dispatches events to an Observer."""
 
+import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
+from hfutils.errors import PlanError
 from hfutils.events import CollectingObserver
-from hfutils.layouts.comfyui import plan_single
+from hfutils.layouts.comfyui import PackOp, plan_single
+from hfutils.layouts.plan import PackPlan
 from hfutils.runner import PlanRunner
 from hfutils.sources.detect import detect_source
 from tests.conftest import make_sharded_component as _make_sharded
@@ -90,3 +93,23 @@ class TestPlanRunner:
 
         assert exploder.plans_started == [plan]
         assert len(exploder.plans_completed) == 1
+
+    def test_refuses_broken_plan_before_on_plan_start(self, tmp_path):
+        """A plan with an incomplete/corrupt source op must be rejected
+        before any writing (or even on_plan_start) happens -- silently
+        merging a component missing shards produces a syntactically valid
+        but semantically broken output with no exception to catch it later."""
+        shard = tmp_path / "in.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        broken_op = PackOp(
+            label="transformer", source=tmp_path, dest=tmp_path / "out.safetensors",
+            shards=[shard], problem="incomplete: missing shard(s) per index.json",
+        )
+        plan = PackPlan(ops=[broken_op], source=detect_source(tmp_path))
+        obs = CollectingObserver()
+
+        with pytest.raises(PlanError, match="incomplete"):
+            PlanRunner(observer=obs).run(plan)
+
+        assert obs.plans_started == []
+        assert not (tmp_path / "out.safetensors").exists()

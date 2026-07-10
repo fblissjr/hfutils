@@ -15,6 +15,7 @@ from hfutils.layouts.comfyui import (
     plan_comfyui,
 )
 from hfutils.sources.detect import detect_source
+from tests.conftest import make_diffusers_pipeline as _make_full_pipeline
 
 
 def _make_pipeline(tmp: Path) -> None:
@@ -112,3 +113,29 @@ class TestPlanComfyui:
     def test_target_folders_includes_core_destinations(self):
         for key in ("diffusion_model", "vae", "text_encoder", "checkpoint", "lora"):
             assert key in TARGET_FOLDERS
+
+
+class TestPlanComfyuiIncompleteDetection:
+    def test_pipeline_component_missing_shard_is_flagged(self, tmp_path):
+        """_plan_component must route through detect_source instead of a
+        raw glob, or an interrupted-download pipeline (shard missing,
+        index.json present) silently merges into a syntactically valid but
+        incomplete output with no signal at all."""
+        _make_full_pipeline(tmp_path)
+        shard = tmp_path / "transformer" / "diffusion_pytorch_model-00002-of-00002.safetensors"
+        assert shard.exists()
+        shard.unlink()
+
+        src = detect_source(tmp_path)
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        by_label = {op.label: op for op in plan.ops}
+        assert by_label["transformer"].problem is not None
+        assert "incomplete" in by_label["transformer"].problem.lower()
+
+    def test_complete_pipeline_has_no_problems(self, tmp_path):
+        _make_full_pipeline(tmp_path)
+        src = detect_source(tmp_path)
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        assert all(op.problem is None for op in plan.ops)

@@ -54,6 +54,43 @@ class TestPackPlan:
         assert any("no shards" in p for p in problems)
 
 
+class TestBrokenOps:
+    def test_returns_only_ops_with_a_problem(self, tmp_path):
+        src = detect_source(tmp_path)
+        shard = tmp_path / "shard.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        clean = PackOp(label="a", source=shard, dest=tmp_path / "a.out", shards=[shard])
+        broken = PackOp(
+            label="b", source=shard, dest=tmp_path / "b.out", shards=[shard],
+            problem="incomplete: missing shard(s) per index.json",
+        )
+        plan = PackPlan(ops=[clean, broken], source=src)
+
+        assert plan.broken_ops() == [broken]
+
+    def test_empty_when_no_ops_have_a_problem(self, tmp_path):
+        src = detect_source(tmp_path)
+        shard = tmp_path / "shard.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        plan = PackPlan(
+            ops=[PackOp(label="a", source=shard, dest=tmp_path / "a.out", shards=[shard])],
+            source=src,
+        )
+
+        assert plan.broken_ops() == []
+
+    def test_plan_single_flags_incomplete_component(self, tmp_path):
+        _make_sharded(tmp_path)
+        # Delete one shard -- index.json still expects it.
+        missing = tmp_path / "shard-00002-of-00002.safetensors"
+        missing.unlink()
+
+        src = detect_source(tmp_path)
+        plan = plan_single(src, tmp_path / "out.safetensors")
+
+        assert plan.ops[0].problem is not None
+
+
 class TestPlanComfyuiReturnsPackPlan:
     def test_pipeline_returns_plan_with_source_and_meta(self, tmp_path):
         (tmp_path / "model_index.json").write_bytes(orjson.dumps({
