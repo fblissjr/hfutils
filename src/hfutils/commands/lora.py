@@ -24,6 +24,7 @@ from hfutils.formats.lora import (
     fuse_lora,
 )
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
+from hfutils.io.fs import check_free_space
 from hfutils.io.progress import make_progress
 
 console = Console()
@@ -158,6 +159,8 @@ def fuse(
     console.print(f"  lora: {lora}")
     console.print(f"  base: {base}")
     console.print(f"  out:  {out}")
+
+    check_free_space(out.parent, base.stat().st_size)
 
     with make_progress(console) as progress:
         observer = RichMergeObserver(progress, f"fuse -> {out.name}", console)

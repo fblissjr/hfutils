@@ -21,7 +21,7 @@ from hfutils.errors import PlanError
 from hfutils.events import RichObserver
 from hfutils.formats.safetensors import Manifest
 from hfutils.inspect.summary import format_summary_lines, summarize_component
-from hfutils.io.fs import check_free_space
+from hfutils.io.fs import check_free_space, resolve_existing_ancestor
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_comfyui, plan_single
 from hfutils.layouts.plan import PackPlan
 from hfutils.runner import PlanRunner
@@ -55,13 +55,25 @@ def _warn(msg: str) -> None:
 def _preflight_space(ops: list[PackOp]) -> None:
     """Refuse to start if any destination filesystem lacks space.
 
+    Groups by resolved filesystem device, not by dest.parent -- multiple
+    destination folders (e.g. diffusion_models/, vae/, text_encoders/) often
+    share one physical disk, so their requirements are summed and checked
+    against one shared budget rather than each independently against the
+    same undiminished free-space total.
+
     Raises InsufficientSpaceError straight through to cli_guard -- no local
     try/except needed."""
-    by_root: dict[Path, int] = defaultdict(int)
+    by_device: dict[int, int] = defaultdict(int)
+    device_probe: dict[int, Path] = {}
     for op in ops:
-        by_root[op.dest.parent] += op.total_bytes
-    for root, required in by_root.items():
-        check_free_space(root, required)
+        probe = resolve_existing_ancestor(op.dest.parent)
+        if probe is None:
+            continue  # pathological; let the OS error naturally at write time
+        dev = probe.stat().st_dev
+        by_device[dev] += op.total_bytes
+        device_probe[dev] = probe
+    for dev, required in by_device.items():
+        check_free_space(device_probe[dev], required)
 
 
 def _print_plan(plan: PackPlan, dry_run: bool) -> None:

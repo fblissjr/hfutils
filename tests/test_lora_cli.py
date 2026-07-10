@@ -130,3 +130,25 @@ class TestLoraFuse:
         ])
         assert result.exit_code != 0
         assert "not found" in result.output
+
+    def test_fuse_refuses_insufficient_space(self, tmp_path, monkeypatch):
+        """fuse() writes a full base-checkpoint-sized output with no
+        preflight check at all -- must gain the same check_free_space guard
+        `convert` already has."""
+        from hfutils.errors import InsufficientSpaceError
+
+        lora = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora)
+        base = tmp_path / "base.safetensors"
+        make_krea2_base(base)
+        out = tmp_path / "fused.safetensors"
+
+        def _fake_check(dest, required):
+            raise InsufficientSpaceError(f"mocked: cannot fit {required} bytes")
+
+        monkeypatch.setattr("hfutils.commands.lora.check_free_space", _fake_check)
+
+        result = runner.invoke(app, ["lora", "fuse", str(lora), str(base), "-o", str(out)])
+        assert result.exit_code == 1
+        assert "mocked" in result.output
+        assert not out.exists()

@@ -10,9 +10,11 @@ from safetensors.torch import save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
+from hfutils.commands.convert import _preflight_space
 from hfutils.formats.safetensors import _merge_metadata, stream_merge
 from hfutils.inspect.safetensors import read_raw_header
 from hfutils.io.fs import InsufficientSpaceError, check_free_space
+from hfutils.layouts.comfyui import PackOp
 
 runner = CliRunner()
 
@@ -54,6 +56,42 @@ class TestDiskSpaceCheck:
         assert result.exit_code == 1
         assert "mocked" in result.output
         assert not (tmp_path / "out.safetensors").exists()
+
+
+class TestDiskSpaceGrouping:
+    """_preflight_space must group by filesystem device, not by dest.parent
+    -- multiple destination folders on the same disk share one free-space
+    budget, they don't each get checked against the full undiminished
+    total independently."""
+
+    def _op(self, dest: Path, total_bytes: int) -> PackOp:
+        op = PackOp(label=dest.stem, dest=dest, source=dest, shards=[])
+        # PackOp.total_bytes is a cached_property (stat-based); seed it
+        # directly rather than writing real multi-GB files to disk.
+        op.__dict__["total_bytes"] = total_bytes
+        return op
+
+    def test_sums_requirements_across_ops_sharing_a_device(self, tmp_path):
+        ops = [
+            self._op(tmp_path / "diffusion_models" / "x.safetensors", 15),
+            self._op(tmp_path / "vae" / "x_vae.safetensors", 3),
+            self._op(tmp_path / "text_encoders" / "x_te.safetensors", 4),
+        ]
+
+        with patch("hfutils.io.fs.shutil.disk_usage") as mock_disk_usage:
+            mock_disk_usage.return_value.free = 20  # sum of ops (22) > this
+            with pytest.raises(InsufficientSpaceError):
+                _preflight_space(ops)
+
+    def test_passes_when_summed_requirement_fits(self, tmp_path):
+        ops = [
+            self._op(tmp_path / "diffusion_models" / "x.safetensors", 5),
+            self._op(tmp_path / "vae" / "x_vae.safetensors", 3),
+        ]
+
+        with patch("hfutils.io.fs.shutil.disk_usage") as mock_disk_usage:
+            mock_disk_usage.return_value.free = 20
+            _preflight_space(ops)  # must not raise
 
 
 class TestMetadataWarnings:
