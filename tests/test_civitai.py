@@ -203,6 +203,29 @@ class TestCivitaiClient:
         assert info.filename == "v1.safetensors"
         assert info.version_id == 100
 
+    def test_resolve_download_missing_expected_key_raises_valueerror(self):
+        """A CivitAI API response missing an expected key (e.g. downloadUrl)
+        must raise ValueError, not a raw KeyError -- _api_call only catches
+        (OSError, ValueError), so an uncaught KeyError would crash the CLI
+        with a traceback instead of a clean message."""
+        model_data = {
+            "id": 12345,
+            "name": "Malformed",
+            "modelVersions": [
+                {
+                    "id": 100,
+                    "name": "v1.0",
+                    "files": [{"name": "m.safetensors", "sizeKB": 1, "primary": True}],
+                    # downloadUrl missing
+                }
+            ],
+        }
+        client = CivitaiClient()
+
+        with patch("urllib.request.urlopen", return_value=_mock_response(model_data)):
+            with pytest.raises(ValueError, match="downloadUrl"):
+                client.resolve_download(12345)
+
     def test_resolve_download_unknown_version_id_raises(self):
         model_data = {
             "id": 12345,
@@ -277,6 +300,21 @@ class TestSearchCli:
 
         assert result.exit_code == 0, result.output
         assert "No results found" in result.output
+
+
+class TestInfoCli:
+    def test_malformed_response_reported_cleanly(self):
+        """A model response missing an expected key (e.g. 'name') must exit
+        cleanly, not crash with a raw KeyError traceback."""
+        runner = CliRunner()
+        model_data = {"id": 12345}  # no "name"
+
+        with patch("urllib.request.urlopen", return_value=_mock_response(model_data)):
+            result = runner.invoke(app, ["civitai", "info", "12345"])
+
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, KeyError)
+        assert "Error" in result.output
 
 
 class TestDlSidecar:

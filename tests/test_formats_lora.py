@@ -326,6 +326,36 @@ class TestFuseLora:
         with pytest.raises(LoraConvertError, match="quantize"):
             fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
 
+    def test_truncated_but_header_valid_lora_raises_loraconverterror(self, tmp_path):
+        """A file whose header parses fine (our hand-rolled read_raw_header
+        only reads the JSON header, not the data region) but whose tensor
+        data is truncated fails inside safetensors.torch's own loader
+        (st_load), which raises safetensors.SafetensorError -- neither
+        HfutilsError nor OSError, so cli_guard can't catch it unless we
+        translate it."""
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        size = lora_p.stat().st_size
+        with open(lora_p, "r+b") as f:
+            f.truncate(size - 20)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
+
+    def test_truncated_but_header_valid_base_raises_loraconverterror(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        size = base_p.stat().st_size
+        with open(base_p, "r+b") as f:
+            f.truncate(size - 20)
+
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
+
     def test_malformed_lora_header_raises_loraconverterror(self, tmp_path):
         bad = tmp_path / "bad.safetensors"
         bad.write_bytes(b"\x00\x00\x00")

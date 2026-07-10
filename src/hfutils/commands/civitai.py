@@ -84,23 +84,26 @@ def info(
     ref, client = _resolve_target(target, host)
     model = _api_call(client.get_model, ref.model_id)
 
-    console.print(f"\n[bold]{model['name']}[/bold]")
-    console.print(f"  ID: {model['id']}")
-    if model.get("type"):
-        console.print(f"  Type: {model['type']}")
-    if model.get("creator", {}).get("username"):
-        console.print(f"  Creator: {model['creator']['username']}")
-    if client.host != DEFAULT_HOST:
-        console.print(f"  Host: {client.host}")
+    try:
+        console.print(f"\n[bold]{model['name']}[/bold]")
+        console.print(f"  ID: {model['id']}")
+        if model.get("type"):
+            console.print(f"  Type: {model['type']}")
+        if model.get("creator", {}).get("username"):
+            console.print(f"  Creator: {model['creator']['username']}")
+        if client.host != DEFAULT_HOST:
+            console.print(f"  Host: {client.host}")
 
-    versions = model.get("modelVersions", [])
-    if versions:
-        console.print(f"\n  [bold]Versions ({len(versions)}):[/bold]")
-        for v in versions:
-            pf = primary_file(v.get("files", []))
-            size_str = format_size(int(pf.get("sizeKB", 0)) * 1024) if pf else "?"
-            marker = " [yellow](selected)[/yellow]" if ref.version_id == v.get("id") else ""
-            console.print(f"    id={v['id']}  {v['name']}  ({size_str}){marker}")
+        versions = model.get("modelVersions", [])
+        if versions:
+            console.print(f"\n  [bold]Versions ({len(versions)}):[/bold]")
+            for v in versions:
+                pf = primary_file(v.get("files", []))
+                size_str = format_size(int(pf.get("sizeKB", 0)) * 1024) if pf else "?"
+                marker = " [yellow](selected)[/yellow]" if ref.version_id == v.get("id") else ""
+                console.print(f"    id={v['id']}  {v['name']}  ({size_str}){marker}")
+    except KeyError as e:
+        fail(f"unexpected CivitAI API response shape: missing {e}")
 
 
 @civitai_app.command()

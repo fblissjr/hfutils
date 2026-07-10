@@ -79,39 +79,48 @@ class CivitaiClient:
         *,
         version_id: int | None = None,
     ) -> DownloadInfo:
-        """Get download info for a model. If `version_id` is None, the latest version is used."""
+        """Get download info for a model. If `version_id` is None, the latest version is used.
+
+        Raises `ValueError` -- including for a malformed API response missing
+        an expected key -- never a raw `KeyError`, so callers routing through
+        `_api_call`'s `(OSError, ValueError)` catch always get a clean error.
+        """
         model = self.get_model(model_id)
-        versions = model.get("modelVersions", [])
-        if not versions:
-            msg = f"No versions found for model {model_id}"
-            raise ValueError(msg)
+        try:
+            versions = model.get("modelVersions", [])
+            if not versions:
+                raise ValueError(f"No versions found for model {model_id}")
 
-        if version_id is None:
-            version = versions[0]
-        else:
-            version = next((v for v in versions if v.get("id") == version_id), None)
-            if version is None:
-                available = ", ".join(str(v.get("id")) for v in versions)
-                msg = f"Version {version_id} not found for model {model_id}. Available: {available}"
-                raise ValueError(msg)
+            if version_id is None:
+                version = versions[0]
+            else:
+                version = next((v for v in versions if v.get("id") == version_id), None)
+                if version is None:
+                    available = ", ".join(str(v.get("id")) for v in versions)
+                    raise ValueError(
+                        f"Version {version_id} not found for model {model_id}. Available: {available}"
+                    )
 
-        primary = primary_file(version.get("files", []))
-        if not primary:
-            msg = f"No files found for version {version['name']}"
-            raise ValueError(msg)
+            primary = primary_file(version.get("files", []))
+            if not primary:
+                raise ValueError(f"No files found for version {version.get('name', version_id)}")
 
-        return DownloadInfo(
-            url=version["downloadUrl"],
-            filename=primary["name"],
-            size_bytes=int(primary.get("sizeKB", 0)) * 1024,
-            model_name=model["name"],
-            version_name=version["name"],
-            model_id=int(model["id"]),
-            version_id=int(version["id"]),
-            trained_words=list(version.get("trainedWords") or []),
-            base_model=version.get("baseModel"),
-            description=model.get("description"),
-        )
+            return DownloadInfo(
+                url=version["downloadUrl"],
+                filename=primary["name"],
+                size_bytes=int(primary.get("sizeKB", 0)) * 1024,
+                model_name=model["name"],
+                version_name=version["name"],
+                model_id=int(model["id"]),
+                version_id=int(version["id"]),
+                trained_words=list(version.get("trainedWords") or []),
+                base_model=version.get("baseModel"),
+                description=model.get("description"),
+            )
+        except KeyError as e:
+            raise ValueError(
+                f"unexpected CivitAI API response shape for model {model_id}: missing {e}"
+            ) from e
 
 
 _AIR_RE = re.compile(r"(?:^|:)civitai:(\d+)(?:@(\d+))?(?:$|[^\d])")

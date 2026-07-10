@@ -30,6 +30,7 @@ import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import orjson
 
@@ -39,6 +40,9 @@ from hfutils.formats.safetensors import Manifest
 from hfutils.inspect.common import QUANT_DTYPE_LABELS
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import stream_region, unlink_on_error
+
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass(frozen=True)
@@ -295,7 +299,7 @@ def fuse_lora(
     """
     try:
         import torch
-        from safetensors import safe_open
+        from safetensors import SafetensorError, safe_open
         from safetensors.torch import load_file as st_load
     except ImportError as e:  # pragma: no cover - exercised via the [ml] extra
         raise LoraConvertError(
@@ -317,8 +321,11 @@ def fuse_lora(
                 pass
 
     # Group LoRA tensors into modules keyed by their base weight name.
-    lora_sd = st_load(str(lora_path))
-    modules: dict[str, dict[str, object]] = {}
+    try:
+        lora_sd = st_load(str(lora_path))
+    except SafetensorError as e:
+        raise LoraConvertError(f"could not read LoRA checkpoint {lora_path}: {e}") from e
+    modules: dict[str, dict[str, torch.Tensor]] = {}
     for name, tensor in lora_sd.items():
         if name.endswith(".lora_A.weight"):
             module, side = name[: -len(".lora_A.weight")], "A"
@@ -347,44 +354,47 @@ def fuse_lora(
         obs.on_warning(f"LoRA module for '{k}' is missing its A or B factor; skipped")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with unlink_on_error(out_path), \
-            safe_open(base_path, framework="pt") as bf, \
-            open(base_path, "rb") as raw_in, open(out_path, "wb") as out:
-        # Output header == base header verbatim (names/shapes/dtypes/offsets unchanged).
-        header_bytes = raw_in.read(8 + base_raw.header_length)[8:]
-        out.write(struct.pack("<Q", base_raw.header_length))
-        out.write(header_bytes)
+    try:
+        with unlink_on_error(out_path), \
+                safe_open(base_path, framework="pt") as bf, \
+                open(base_path, "rb") as raw_in, open(out_path, "wb") as out:
+            # Output header == base header verbatim (names/shapes/dtypes/offsets unchanged).
+            header_bytes = raw_in.read(8 + base_raw.header_length)[8:]
+            out.write(struct.pack("<Q", base_raw.header_length))
+            out.write(header_bytes)
 
-        fused = 0
-        for entry in sorted(base_raw.tensors, key=lambda t: t.data_offset_start):
-            size = entry.data_offset_end - entry.data_offset_start
-            if entry.name in fuseable:
-                if _is_quantized_dtype(entry.dtype):
-                    raise LoraConvertError(
-                        f"base weight '{entry.name}' is {entry.dtype}; fuse into the "
-                        f"full-precision (bf16) base, then quantize the result"
-                    )
-                w = bf.get_tensor(entry.name)
-                a, b = fuseable[entry.name]["A"], fuseable[entry.name]["B"]
-                rank = a.shape[0]
-                if rank == 0 or b.shape[-1] != rank:
-                    raise LoraConvertError(
-                        f"'{entry.name}': incompatible LoRA factor shapes "
-                        f"A={tuple(a.shape)} B={tuple(b.shape)}"
-                    )
-                scale = (alpha / rank if alpha is not None else 1.0) * strength
-                delta = torch.matmul(b.to(torch.float32), a.to(torch.float32)) * scale
-                if delta.shape != tuple(w.shape):
-                    raise LoraConvertError(
-                        f"shape mismatch fusing '{entry.name}': base {tuple(w.shape)} "
-                        f"vs delta {tuple(delta.shape)}"
-                    )
-                fused_w = (w.to(torch.float32) + delta).to(w.dtype).contiguous()
-                out.write(fused_w.flatten().view(torch.uint8).numpy())
-                fused += 1
-            else:
-                raw_in.seek(base_raw.data_region_start + entry.data_offset_start)
-                stream_region(raw_in, out, size, src_desc=str(base_path), error_cls=LoraConvertError)
-            obs.on_progress(size)
+            fused = 0
+            for entry in sorted(base_raw.tensors, key=lambda t: t.data_offset_start):
+                size = entry.data_offset_end - entry.data_offset_start
+                if entry.name in fuseable:
+                    if _is_quantized_dtype(entry.dtype):
+                        raise LoraConvertError(
+                            f"base weight '{entry.name}' is {entry.dtype}; fuse into the "
+                            f"full-precision (bf16) base, then quantize the result"
+                        )
+                    w = bf.get_tensor(entry.name)
+                    a, b = fuseable[entry.name]["A"], fuseable[entry.name]["B"]
+                    rank = a.shape[0]
+                    if rank == 0 or b.shape[-1] != rank:
+                        raise LoraConvertError(
+                            f"'{entry.name}': incompatible LoRA factor shapes "
+                            f"A={tuple(a.shape)} B={tuple(b.shape)}"
+                        )
+                    scale = (alpha / rank if alpha is not None else 1.0) * strength
+                    delta = torch.matmul(b.to(torch.float32), a.to(torch.float32)) * scale
+                    if delta.shape != tuple(w.shape):
+                        raise LoraConvertError(
+                            f"shape mismatch fusing '{entry.name}': base {tuple(w.shape)} "
+                            f"vs delta {tuple(delta.shape)}"
+                        )
+                    fused_w = (w.to(torch.float32) + delta).to(w.dtype).contiguous()
+                    out.write(fused_w.flatten().view(torch.uint8).numpy())
+                    fused += 1
+                else:
+                    raw_in.seek(base_raw.data_region_start + entry.data_offset_start)
+                    stream_region(raw_in, out, size, src_desc=str(base_path), error_cls=LoraConvertError)
+                obs.on_progress(size)
+    except SafetensorError as e:
+        raise LoraConvertError(f"could not read base checkpoint {base_path}: {e}") from e
 
     return FuseResult(fused=fused, lora_modules=len(modules), unmatched=unmatched)
