@@ -78,7 +78,7 @@ def _check_incomplete(index_path: Path, present_names: set[str]) -> bool:
     return bool(expected - present_names)
 
 
-def _check_shard_integrity(shards: list[Path]) -> IntegrityError | None:
+def check_shard_integrity(shards: list[Path]) -> IntegrityError | None:
     """Read each shard's header; confirm declared tensor-data size matches
     file size. Returns a structured `IntegrityError` if anything is off, or
     None if all shards check out."""
@@ -110,7 +110,7 @@ def _detect_component_or_pytorch_dir(path: Path, level: DetectLevel) -> Source |
             if sharded else False
         )
         integrity_error = (
-            _check_shard_integrity(shards) if level == DetectLevel.FULL else None
+            check_shard_integrity(shards) if level == DetectLevel.FULL else None
         )
         return ComponentSource(
             path=path,

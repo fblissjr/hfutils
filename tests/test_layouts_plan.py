@@ -90,6 +90,30 @@ class TestBrokenOps:
 
         assert plan.ops[0].problem is not None
 
+    def test_plan_single_flags_truncated_single_file(self, tmp_path):
+        """plan_single's SafetensorsFileSource branch got no problem= check
+        at all -- a truncated bare .safetensors file merged silently."""
+        f = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(8, 8)}, f)
+        size = f.stat().st_size
+        with open(f, "r+b") as fh:
+            fh.truncate(size - 20)
+        src = detect_source(f)
+
+        plan = plan_single(src, tmp_path / "out.safetensors")
+
+        assert plan.ops[0].problem is not None
+        assert "truncated" in plan.ops[0].problem.lower()
+
+    def test_plan_single_clean_single_file_has_no_problem(self, tmp_path):
+        f = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(2, 2)}, f)
+        src = detect_source(f)
+
+        plan = plan_single(src, tmp_path / "out.safetensors")
+
+        assert plan.ops[0].problem is None
+
 
 class TestPlanComfyuiReturnsPackPlan:
     def test_pipeline_returns_plan_with_source_and_meta(self, tmp_path):

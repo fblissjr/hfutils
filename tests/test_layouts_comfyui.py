@@ -13,9 +13,16 @@ from hfutils.layouts.comfyui import (
     ConvertTarget,
     PackOp,
     plan_comfyui,
+    plan_single,
 )
 from hfutils.sources.detect import detect_source
 from tests.conftest import make_diffusers_pipeline as _make_full_pipeline
+
+
+def _truncate(path: Path, remove_bytes: int) -> None:
+    size = path.stat().st_size
+    with open(path, "r+b") as f:
+        f.truncate(size - remove_bytes)
 
 
 def _make_pipeline(tmp: Path) -> None:
@@ -139,3 +146,54 @@ class TestPlanComfyuiIncompleteDetection:
         plan = plan_comfyui(src, tmp_path / "comfy", name="X")
 
         assert all(op.problem is None for op in plan.ops)
+
+    def test_truncated_unsharded_component_is_flagged(self, tmp_path):
+        """A single-file (no index.json) component that's truncated must be
+        flagged too -- not just multi-shard sets with a missing shard. This
+        is a 'copy'-kind op (len(shards)==1), which the merge-kind EOF check
+        never protects."""
+        _make_full_pipeline(tmp_path)
+        vae_file = tmp_path / "vae" / "diffusion_pytorch_model.safetensors"
+        _truncate(vae_file, 20)
+
+        src = detect_source(tmp_path)
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        by_label = {op.label: op for op in plan.ops}
+        assert by_label["vae"].problem is not None
+        assert "truncated" in by_label["vae"].problem.lower()
+
+    def test_truncated_single_file_source_with_target_is_flagged(self, tmp_path):
+        """SafetensorsFileSource copy-ops (--as target on a bare file) got no
+        problem= check at all -- same gap, different Source variant."""
+        f = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(8, 8)}, f)
+        _truncate(f, 20)
+        src = detect_source(f)
+
+        plan = plan_comfyui(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
+
+        assert plan.ops[0].problem is not None
+        assert "truncated" in plan.ops[0].problem.lower()
+
+    def test_clean_single_file_source_has_no_problem(self, tmp_path):
+        f = tmp_path / "m.safetensors"
+        save_file({"w": torch.randn(2, 2)}, f)
+        src = detect_source(f)
+
+        plan = plan_comfyui(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
+
+        assert plan.ops[0].problem is None
+
+    def test_truncated_component_dir_with_target_is_flagged(self, tmp_path):
+        """plan_comfyui's ComponentSource branch (--as target on a component
+        dir) with a single shard must also be checked."""
+        f = tmp_path / "shard-00001-of-00001.safetensors"
+        save_file({"w": torch.randn(8, 8)}, f)
+        _truncate(f, 20)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "c", name="X", target=ConvertTarget.DIFFUSION_MODEL)
+
+        assert plan.ops[0].problem is not None
+        assert "truncated" in plan.ops[0].problem.lower()

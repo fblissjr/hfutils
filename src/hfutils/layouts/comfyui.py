@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from hfutils.errors import PlanError
-from hfutils.sources.detect import detect_source
+from hfutils.sources.detect import check_shard_integrity, detect_source
 from hfutils.sources.types import (
     ComponentSource,
     PipelineSource,
@@ -94,18 +94,31 @@ def _target_dest(target: ConvertTarget, comfyui_root: Path, name: str) -> Path:
     return comfyui_root / folder / f"{name}.safetensors"
 
 
+def _copy_integrity_problem(shards: list[Path]) -> str | None:
+    """For a 'copy'-kind op (exactly one shard), directly check its
+    declared-vs-actual data size.
+
+    `copy_chunks` (the write path for a single-shard op) does no validation
+    of its own -- unlike `stream_merge`, which self-validates via its EOF
+    check on every merge. `ComponentSource.integrity_error` only catches this
+    at `DetectLevel.FULL`, which planning never requests (a directory-wide
+    per-dir cost CLAUDE.md reserves for single-target `inspect`). This is a
+    single, direct header read scoped to the one file actually being
+    planned -- not a directory walk -- so it doesn't touch that constraint."""
+    if len(shards) != 1:
+        return None
+    error = check_shard_integrity(shards)
+    return str(error) if error is not None else None
+
+
 def _source_problem(src: ComponentSource) -> str | None:
     """Human-readable reason this source shouldn't be packed, or None if
-    it's fine. Checked at BASIC detect level only (missing-shard detection
-    via index.json) -- not FULL-level integrity (truncated-but-present
-    shards already raise StreamMergeError mid-copy, so BASIC's cheap
-    missing-shard check is the only thing that can catch a shard that's
-    entirely absent)."""
+    it's fine."""
     if src.integrity_error is not None:
         return str(src.integrity_error)
     if src.incomplete:
         return "incomplete: shard(s) missing per index.json"
-    return None
+    return _copy_integrity_problem(src.shards)
 
 
 def _plan_component(
@@ -185,6 +198,7 @@ def plan_comfyui(
                 ops=[PackOp(
                     label="single", source=p, shards=[p],
                     dest=_target_dest(target, comfyui_root, name),
+                    problem=_copy_integrity_problem([p]),
                 )],
                 source=source,
                 meta={"target": "comfyui"},
@@ -209,7 +223,10 @@ def plan_single(source: Source, output: Path) -> "PackPlan":
                 problem=_source_problem(source),
             )
         case SafetensorsFileSource(path=p):
-            op = PackOp(label="single", source=p, shards=[p], dest=output)
+            op = PackOp(
+                label="single", source=p, shards=[p], dest=output,
+                problem=_copy_integrity_problem([p]),
+            )
         case _:
             raise PlanError(
                 f"plan_single expects a ComponentSource or SafetensorsFileSource; "
