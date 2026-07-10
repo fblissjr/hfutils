@@ -7,7 +7,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from hfutils.errors import HfutilsError, StreamMergeError
-from hfutils.formats.safetensors import stream_merge
+from hfutils.formats.safetensors import manifest_from_shards, stream_merge
 from hfutils.inspect.safetensors import read_raw_header
 
 
@@ -107,6 +107,16 @@ class TestStreamMerge:
             cursor = entry.data_offset_end
         assert cursor == total_data
 
+    def test_malformed_header_raises_streammergeerror_not_valueerror(self, tmp_path):
+        """read_raw_header raises a bare ValueError on a truncated/malformed
+        header -- stream_merge must translate that into StreamMergeError so
+        the CLI's cli_guard (which only catches HfutilsError/OSError) can
+        surface it cleanly instead of a raw traceback."""
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")  # shorter than the 8-byte length prefix
+        with pytest.raises(StreamMergeError):
+            stream_merge([bad], tmp_path / "out.safetensors")
+
     def test_cleans_up_partial_output_on_failure(self, tmp_path):
         """A mid-copy failure (e.g. a shard truncated after the header was
         read) must not leave a truncated-but-header-valid file at the
@@ -145,3 +155,11 @@ class TestStreamMerge:
         # Observed peak is ~8 MiB (4 MiB read chunk + 4 MiB write buffer).
         # 10 MiB gives 25% headroom; still way under the 16 MiB loose threshold.
         assert peak < 10 * 1024 * 1024, f"peak Python allocation was {peak / 1024 / 1024:.1f} MiB"
+
+
+class TestManifestFromShards:
+    def test_malformed_header_raises_streammergeerror_not_valueerror(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+        with pytest.raises(StreamMergeError):
+            manifest_from_shards([bad])

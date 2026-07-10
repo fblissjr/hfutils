@@ -186,6 +186,12 @@ class TestConvertLoraKeys:
         assert obs.total == data_total
         assert obs.advanced == data_total
 
+    def test_malformed_header_raises_loraconverterror_not_valueerror(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+        with pytest.raises(LoraConvertError):
+            convert_lora_keys(bad, tmp_path / "out.safetensors", KREA2_FAL)
+
     def test_cleans_up_partial_output_on_failure(self, tmp_path, monkeypatch):
         """A mid-copy failure must not leave a truncated-but-header-valid
         file behind at the destination. convert_lora_keys derives its copy
@@ -319,6 +325,22 @@ class TestFuseLora:
         make_krea2_base(base_p, dtype=torch.float8_e4m3fn)
         with pytest.raises(LoraConvertError, match="quantize"):
             fuse_lora(lora_p, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
+
+    def test_malformed_lora_header_raises_loraconverterror(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+        base_p = tmp_path / "base.safetensors"
+        make_krea2_base(base_p)
+        with pytest.raises(LoraConvertError):
+            fuse_lora(bad, base_p, tmp_path / "fused.safetensors", KREA2_FAL)
+
+    def test_malformed_base_header_raises_loraconverterror(self, tmp_path):
+        lora_p = tmp_path / "lora.safetensors"
+        make_fal_krea2_lora(lora_p)
+        bad_base = tmp_path / "bad_base.safetensors"
+        bad_base.write_bytes(b"\x00\x00\x00")
+        with pytest.raises(LoraConvertError):
+            fuse_lora(lora_p, bad_base, tmp_path / "fused.safetensors", KREA2_FAL)
 
     def test_cleans_up_partial_output_on_failure(self, tmp_path, monkeypatch):
         """A mid-copy failure must not leave a truncated-but-header-valid

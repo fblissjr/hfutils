@@ -177,6 +177,15 @@ def detect_lora_scheme(header: RawHeader) -> LoraScheme | None:
     return None
 
 
+def _read_raw_header_or_raise(path: Path) -> RawHeader:
+    """`read_raw_header`, translating malformed-input errors into
+    `LoraConvertError` so callers only need to handle `HfutilsError`."""
+    try:
+        return read_raw_header(path)
+    except (ValueError, OSError, orjson.JSONDecodeError) as e:
+        raise LoraConvertError(f"could not read header of {path}: {e}") from e
+
+
 def convert_lora_keys(
     src_path: Path,
     dst_path: Path,
@@ -196,7 +205,7 @@ def convert_lora_keys(
     """
     obs: MergeObserver = observer if observer is not None else NullMergeObserver()
 
-    raw = read_raw_header(src_path)
+    raw = _read_raw_header_or_raise(src_path)
 
     new_tensors: dict[str, dict] = {}
     manifest: Manifest = {}
@@ -298,7 +307,7 @@ def fuse_lora(
     if scheme.to_base_key is None:
         raise LoraConvertError(f"scheme '{scheme.name}' does not support fuse")
 
-    lora_raw = read_raw_header(lora_path)
+    lora_raw = _read_raw_header_or_raise(lora_path)
     if alpha is None:
         meta_alpha = lora_raw.metadata.get("lora_alpha")
         if meta_alpha is not None:
@@ -322,7 +331,7 @@ def fuse_lora(
             continue
         modules.setdefault(base_key, {})[side] = tensor
 
-    base_raw = read_raw_header(base_path)
+    base_raw = _read_raw_header_or_raise(base_path)
     base_names = {t.name for t in base_raw.tensors}
 
     unmatched = sorted(k for k in modules if k not in base_names)

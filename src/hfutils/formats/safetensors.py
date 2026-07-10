@@ -27,6 +27,15 @@ from hfutils.io.progress import stream_region, unlink_on_error
 # user-space-bound). See internal/log/log_2026-04-19.md for numbers.
 
 
+def _read_raw_header_or_raise(path: Path) -> RawHeader:
+    """`read_raw_header`, translating malformed-input errors into
+    `StreamMergeError` so callers only need to handle `HfutilsError`."""
+    try:
+        return read_raw_header(path)
+    except (ValueError, OSError, orjson.JSONDecodeError) as e:
+        raise StreamMergeError(f"could not read header of {path}: {e}") from e
+
+
 def _merge_metadata(
     headers: list[RawHeader],
     shard_paths: list[Path],
@@ -127,7 +136,7 @@ def stream_merge(
     if not shard_paths:
         raise StreamMergeError("stream_merge requires at least one shard")
 
-    headers = [read_raw_header(p) for p in shard_paths]
+    headers = [_read_raw_header_or_raise(p) for p in shard_paths]
     header_bytes, plan, warnings = _build_merged_header_json(headers, shard_paths)
 
     for msg in warnings:
@@ -205,5 +214,5 @@ def manifest_from_shards(shard_paths: list[Path]) -> Manifest:
     return {
         entry.name: (entry.dtype, tuple(entry.shape))
         for p in shard_paths
-        for entry in read_raw_header(p).tensors
+        for entry in _read_raw_header_or_raise(p).tensors
     }
