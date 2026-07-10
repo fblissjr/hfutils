@@ -49,6 +49,21 @@ class TestLoraConvert:
         assert result.exit_code == 0, result.output
         assert not (tmp_path / "fal_comfy.safetensors").exists()
 
+    def test_verify_mismatch_exits_2(self, tmp_path, monkeypatch):
+        """--verify's failure exit code (2) is distinct from every other
+        error path (1) and must survive the cli_guard refactor untouched."""
+        src = tmp_path / "fal.safetensors"
+        make_fal_krea2_lora(src)
+
+        monkeypatch.setattr(
+            "hfutils.cli_support.verify_output",
+            lambda dest, manifest: (False, "forced mismatch"),
+        )
+
+        result = runner.invoke(app, ["lora", "convert", str(src), "--verify"])
+        assert result.exit_code == 2, result.output
+        assert "forced mismatch" in result.output
+
     def test_auto_detect_fails_on_unrelated_file(self, tmp_path):
         src = tmp_path / "plain.safetensors"
         save_file({"w": torch.randn(2, 2)}, src)

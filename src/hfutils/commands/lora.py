@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from hfutils.errors import LoraConvertError
+from hfutils.cli_support import cli_guard, fail, verify_and_report
 from hfutils.events import RichMergeObserver
 from hfutils.formats.lora import (
     LORA_SCHEMES,
@@ -23,7 +23,6 @@ from hfutils.formats.lora import (
     detect_lora_scheme,
     fuse_lora,
 )
-from hfutils.formats.safetensors import verify_output
 from hfutils.inspect.safetensors import RawHeader, read_raw_header
 from hfutils.io.progress import make_progress
 
@@ -36,10 +35,6 @@ lora_app = typer.Typer(
 )
 
 
-def _error(msg: str) -> None:
-    console.print(f"[red]Error:[/red] {msg}")
-
-
 def _scheme_list() -> str:
     return ", ".join(LORA_SCHEMES) or "(none)"
 
@@ -49,20 +44,19 @@ def _resolve_scheme(header: RawHeader, scheme: str) -> LoraScheme:
     if scheme == "auto":
         resolved = detect_lora_scheme(header)
         if resolved is None:
-            _error(
+            fail(
                 f"could not detect a known LoRA scheme. Known: {_scheme_list()}. "
                 f"Pass --scheme <name> to force one."
             )
-            raise typer.Exit(1)
         return resolved
     resolved = LORA_SCHEMES.get(scheme)
     if resolved is None:
-        _error(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
-        raise typer.Exit(1)
+        fail(f"unknown scheme '{scheme}'. Known: {_scheme_list()}.")
     return resolved
 
 
 @lora_app.command("schemes")
+@cli_guard
 def schemes() -> None:
     """List the available LoRA conversion schemes."""
     console.print("[bold]Available LoRA conversion schemes:[/bold]")
@@ -71,6 +65,7 @@ def schemes() -> None:
 
 
 @lora_app.command("convert")
+@cli_guard
 def convert(
     source: Path = typer.Argument(..., help="LoRA .safetensors file to convert"),
     out: Path | None = typer.Option(
@@ -90,22 +85,19 @@ def convert(
 ) -> None:
     """Rename a LoRA's keys so a target loader accepts it."""
     if not source.is_file():
-        _error(f"input not found: {source}")
-        raise typer.Exit(1)
+        fail(f"input not found: {source}")
 
     try:
         header = read_raw_header(source)
     except (ValueError, OSError) as e:
-        _error(f"could not read safetensors header: {e}")
-        raise typer.Exit(1)
+        fail(f"could not read safetensors header: {e}")
 
     resolved = _resolve_scheme(header, scheme)
     if scheme != "auto" and not resolved.matches(header) and not force:
-        _error(
+        fail(
             f"{source.name} doesn't look like a '{resolved.name}' source LoRA. "
             f"Re-run with --force to convert anyway."
         )
-        raise typer.Exit(1)
 
     dest = out or source.with_name(source.stem + "_comfy.safetensors")
 
@@ -118,20 +110,13 @@ def convert(
         console.print("\n[yellow]Dry run[/yellow] -- no file written.")
         return
 
-    try:
-        with make_progress(console) as progress:
-            observer = RichMergeObserver(progress, f"convert -> {dest.name}", console)
-            manifest = convert_lora_keys(source, dest, resolved, observer=observer)
-    except LoraConvertError as e:
-        _error(str(e))
-        raise typer.Exit(1)
+    with make_progress(console) as progress:
+        observer = RichMergeObserver(progress, f"convert -> {dest.name}", console)
+        manifest = convert_lora_keys(source, dest, resolved, observer=observer)
 
     if verify:
-        ok, problem = verify_output(dest, manifest)
-        if not ok:
-            _error(f"verify {dest.name}: {problem}")
+        if not verify_and_report(dest, manifest):
             raise typer.Exit(2)
-        console.print(f"[green]Verified[/green] {dest.name}: {len(manifest)} tensors match.")
 
     console.print(
         f"\n[green]Done.[/green] Wrote {len(manifest)} tensors to {dest}. "
@@ -140,6 +125,7 @@ def convert(
 
 
 @lora_app.command("fuse")
+@cli_guard
 def fuse(
     lora: Path = typer.Argument(..., help="LoRA .safetensors (source or converted naming)"),
     base: Path = typer.Argument(..., help="Full-precision (bf16) base checkpoint .safetensors"),
@@ -157,32 +143,25 @@ def fuse(
     """Bake a LoRA into the base checkpoint (then quantize for zero runtime cost)."""
     for label, path in (("lora", lora), ("base", base)):
         if not path.is_file():
-            _error(f"{label} not found: {path}")
-            raise typer.Exit(1)
+            fail(f"{label} not found: {path}")
 
     try:
         header = read_raw_header(lora)
     except (ValueError, OSError) as e:
-        _error(f"could not read LoRA header: {e}")
-        raise typer.Exit(1)
+        fail(f"could not read LoRA header: {e}")
 
     resolved = _resolve_scheme(header, scheme)
     if resolved.to_base_key is None:
-        _error(f"scheme '{resolved.name}' does not support fuse.")
-        raise typer.Exit(1)
+        fail(f"scheme '{resolved.name}' does not support fuse.")
 
     console.print(f"Scheme: [cyan]{resolved.name}[/cyan]  strength={strength}")
     console.print(f"  lora: {lora}")
     console.print(f"  base: {base}")
     console.print(f"  out:  {out}")
 
-    try:
-        with make_progress(console) as progress:
-            observer = RichMergeObserver(progress, f"fuse -> {out.name}", console)
-            result = fuse_lora(lora, base, out, resolved, strength=strength, alpha=alpha, observer=observer)
-    except LoraConvertError as e:
-        _error(str(e))
-        raise typer.Exit(1)
+    with make_progress(console) as progress:
+        observer = RichMergeObserver(progress, f"fuse -> {out.name}", console)
+        result = fuse_lora(lora, base, out, resolved, strength=strength, alpha=alpha, observer=observer)
 
     if result.unmatched:
         console.print(f"[yellow]{len(result.unmatched)} LoRA module(s) had no base match[/yellow] (skipped).")
