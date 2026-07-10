@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 
 from hfutils.cli import app
+from hfutils.cli_support import cli_guard, fail
 from hfutils.inspect.views import display_source, display_tree
 from hfutils.inspect.walker import walk_for_models
 from hfutils.sources.detect import DetectLevel, detect_source
@@ -14,6 +15,7 @@ console = Console()
 
 
 @app.command()
+@cli_guard
 def inspect(
     path: Path = typer.Argument(..., help="File, component dir, diffusers pipeline, or directory tree"),
     detail: bool = typer.Option(False, "--detail", "-d", help="Show architecture detection and full tensor list"),
@@ -21,13 +23,11 @@ def inspect(
 ) -> None:
     """Inspect model file headers and directory layouts."""
     if not path.exists():
-        console.print(f"[red]Error:[/red] {path} not found")
-        raise typer.Exit(1)
+        fail(f"{path} not found")
 
     if recursive:
         if not path.is_dir():
-            console.print("[red]Error:[/red] --recursive requires a directory")
-            raise typer.Exit(1)
+            fail("--recursive requires a directory")
         entries = walk_for_models(path)
         if not entries:
             console.print("No models found.")
