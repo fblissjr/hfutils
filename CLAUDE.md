@@ -1,4 +1,4 @@
-Last updated: 2026-06-26
+Last updated: 2026-07-10
 
 # hfutils
 
@@ -18,8 +18,9 @@ hfutils lora schemes                         # list LoRA conversion schemes
 hfutils civitai search|info|dl
 ```
 
-`convert --to comfyui` flags: `--root` (required), `--name`, `--only <c>` (repeat), `--skip <c>` (repeat), `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`, `--verify`.
-`convert --to single` flags: `--out` (required), `--component <c>` (for pipeline sources), `--dry-run`, `--verify`.
+`convert --to comfyui` flags: `--root` (required), `--name`, `--only <c>` (repeat), `--skip <c>` (repeat), `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`, `--verify`, `--force`.
+`convert --to single` flags: `--out` (required), `--component <c>` (for pipeline sources), `--dry-run`, `--verify`, `--force`.
+`convert`'s `--force` writes an incomplete/corrupt source anyway (still warns; see "Incomplete/corrupt-source hard-stop" below) -- distinct from `lora convert --force`, which bypasses a scheme-mismatch check instead.
 
 ## Layout
 
@@ -27,9 +28,10 @@ hfutils civitai search|info|dl
 src/hfutils/
   __init__.py             -- public API (all stable symbols re-exported here)
   cli.py                  -- typer root + --version; registers inspect, convert, civitai
-  errors.py               -- HfutilsError + subclasses (SourceError, PlanError, StreamMergeError, LoraConvertError, VerificationError, InsufficientSpaceError)
+  cli_support.py          -- fail() / cli_guard() / verify_and_report(): shared CLI error handling, used by every commands/*.py
+  errors.py               -- HfutilsError + subclasses (PlanError, StreamMergeError, LoraConvertError, InsufficientSpaceError)
   events.py               -- Observer + MergeObserver protocols + NullObserver / CollectingObserver / RichObserver (plan-scope) / RichMergeObserver (merge-scope)
-  runner.py               -- PlanRunner (executes a PackPlan, dispatches events to an Observer)
+  runner.py               -- PlanRunner (executes a PackPlan; hard-stops on PackPlan.broken_ops()/.missing unless force=True; dispatches events to an Observer)
   commands/
     inspect.py            -- thin CLI wrapper; dispatches via DetectLevel.FULL
     convert.py            -- unified `convert <src> --to <layout>` command
@@ -39,26 +41,26 @@ src/hfutils/
     safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
     lora.py               -- LoraScheme + LORA_SCHEMES registry + convert_lora_keys (streaming key rename) + fuse_lora (torch, bake into base)
   sources/
-    detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView
+    detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView + check_shard_integrity(shards) (declared-vs-actual size; also called directly at plan time for single-shard ops, bypassing DetectLevel -- see Conventions)
     types.py              -- Source union + variants (PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource) + IntegrityError + display_kind()
   layouts/
-    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS (keyed on ConvertTarget) + plan_comfyui + plan_single; PackOp has a cached total_bytes
-    plan.py               -- PackPlan (total_bytes is sum of op.total_bytes, lazily)
+    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS (keyed on ConvertTarget) + plan_comfyui + plan_single; PackOp has a cached total_bytes and an optional problem (incomplete/corrupt source)
+    plan.py               -- PackPlan (total_bytes is sum of op.total_bytes, lazily; validate() is CLI-only advisory, broken_ops()/missing are hard-stopped by PlanRunner)
   inspect/
     common.py             -- TensorInfo, SafetensorsHeader (with .combine()), DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params, read_json_if_exists
-    safetensors.py        -- read_header + read_raw_header (per-tensor data_offsets)
+    safetensors.py        -- read_header + read_raw_header (per-tensor data_offsets) + read_raw_header_or_raise(path, error_cls=...) (shared by formats/{safetensors,lora}.py)
     gguf.py               -- GGUF header reader; rope params, token ids, chat template
     architecture.py       -- _FAMILY_RULES + architecture_name_from_config
     summary.py            -- ComponentSummary for pre-conversion display
     views.py              -- display_* helpers (pattern-match on Source variants; explicit Console param)
     walker.py             -- walk_for_models (ThreadPoolExecutor, 8 workers)
   io/
-    progress.py           -- make_progress + copy_chunks (primitive) + copy_with_progress (rich wrapper) + COPY_CHUNK
+    progress.py           -- make_progress + copy_chunks (primitive; on_chunk + on_open callbacks) + copy_with_progress (rich wrapper) + stream_region (bounded seek-copy, error_cls-parametrized) + unlink_on_error (mark_started()-gated cleanup) + COPY_CHUNK
     fs.py                 -- check_free_space preflight
   providers/
     civitai.py            -- CivitaiClient API client
     download.py           -- resumable download + rich progress (uses make_progress)
-tests/                    -- 250 tests, pytest (includes Hypothesis property tests for stream_merge)
+tests/                    -- 339 tests, pytest (includes Hypothesis property tests for stream_merge)
 ```
 
 ## Dev
@@ -84,15 +86,18 @@ tests/                    -- 250 tests, pytest (includes Hypothesis property tes
 - Rich console for all user-facing output
 - Memory-bound tests use `tracemalloc` (Python-heap scoped), never `ru_maxrss` (process-wide, flaky).
 - **Source is a discriminated union.** `Source = PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource`. Dispatch via `match src:` or `isinstance`. Do not invent a kind enum. `detect_source(path, level: DetectLevel)` is the only classification point; `enrich(source)` returns a fresh `EnrichedView` (immutable pattern, safe to call from threads).
-- **DetectLevel.BASIC (default) skips integrity.** Only single-target inspect passes `DetectLevel.FULL`. Walker / convert / plan_* all use default. Adding always-on work per-dir to the walker is a regression.
+- **DetectLevel.BASIC (default) skips integrity.** Only single-target inspect passes `DetectLevel.FULL`. Walker / convert / plan_* all use default. Adding always-on work per-dir to the walker is a regression. Exception: single-shard `SafetensorsFileSource` planning calls `check_shard_integrity` directly (one header read scoped to the file being planned, not a directory walk), so `plan_comfyui`/`plan_single` catch a truncated single-file source without waiting on `stream_merge`'s EOF check. This is a scoped call at plan time, not a change to what `DetectLevel.BASIC` itself computes.
 - **Plan/Execute/Observe split.**
   - `plan_comfyui` / `plan_single` return `PackPlan`. No filesystem writes.
   - `PlanRunner(observer).run(plan)` executes. Observer receives lifecycle events.
   - CLI wraps with `RichObserver`. Library consumers attach `NullObserver`, `CollectingObserver`, or custom.
 - **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
-- **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `SourceError`, `PlanError`, `StreamMergeError`, `LoraConvertError`, `VerificationError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics).
-- **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. Do not fork twin copies.
-- **Single-file streaming ops** (`convert_lora_keys`, `fuse_lora`) take a `MergeObserver`; for CLI progress build `RichMergeObserver(progress, label)` (merge-scope, in `events.py`) -- don't hand-roll one. `io/progress.copy_chunks` is EOF-only (own handles, copies from offset 0); bounded copies from a seek offset use `formats/lora._stream_region`.
+- **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `PlanError`, `StreamMergeError`, `LoraConvertError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics) -- but any call site that reads a header as a *prerequisite* for an hfutils operation (not the operation itself) should go through `inspect/safetensors.read_raw_header_or_raise(path, error_cls=...)` instead of a bare `read_raw_header`, so a truncated/malformed file surfaces as the caller's own `HfutilsError` subclass rather than an uncaught `ValueError`. `commands/*.py` catch the `HfutilsError` hierarchy via `cli_support.cli_guard` (see below), not per-command try/except.
+- **CLI error handling is centralized in `cli_support.py`.** `fail(msg)` prints `[red]Error:[/red] ...` and raises `typer.Exit(1)`; `cli_guard` is a decorator applied to every `@app.command()` that catches `(HfutilsError, OSError)` escaping the command and routes it through `fail()` -- deliberately not a blanket `except Exception`, so a bare `ValueError`/`RuntimeError` (a real bug) still surfaces a full traceback instead of being swallowed as if it were user-facing. `verify_and_report(dest, manifest)` is the shared `--verify` helper (print + `fail()` on mismatch) used by every command that offers `--verify`. Don't hand-roll a local `_error()` or inline try/except in a new command -- use these three.
+- **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb, on_open=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. `stream_region(fin, fout, size, *, src_desc, on_chunk=None, error_cls=OSError)` is the shared bounded seek-copy primitive (`formats/safetensors.py` and `formats/lora.py` both import it from here -- don't reintroduce a per-module copy). Do not fork twin copies.
+- **`unlink_on_error(path)` deletes a partially-written destination on failure -- but only once writing has actually started.** It yields a `mark_started()` callback; call it *after* the destination file is successfully opened (inside the `with open(dst, "wb") as ...:` block or immediately after the last context manager in the `with` statement succeeds), never before. Calling it too early deletes files that failed for a reason unrelated to this write (e.g. a prerequisite file that doesn't exist) instead of only cleaning up genuine partial writes.
+- **Single-file streaming ops** (`convert_lora_keys`, `fuse_lora`) take a `MergeObserver`; for CLI progress build `RichMergeObserver(progress, label)` (merge-scope, in `events.py`) -- don't hand-roll one. `io/progress.copy_chunks` is EOF-only (own handles, copies from offset 0); bounded copies from a seek offset use `io/progress.stream_region`.
+- **Incomplete/corrupt-source hard-stop.** `PackOp.problem: str | None` (set by `_source_problem`/`_copy_integrity_problem` in `layouts/comfyui.py`) flags a single op as incomplete or corrupt; `PackPlan.missing: list[str]` flags a pipeline component with zero weight files on disk at all (no `PackOp` exists to attach a problem to). `PlanRunner.run()` checks both before any write and raises `PlanError` unless `force=True` is passed -- this is enforced in the library layer, not the CLI, so any consumer of `PackPlan`/`PlanRunner` gets the protection automatically. `PackPlan.validate()` (duplicate-destination warnings) stays CLI-only advisory, not hard-stopped by `PlanRunner` -- deliberate asymmetry: a duplicate destination is a footgun but still usable, while an incomplete/missing source guarantees a broken output with no later exception path to catch it. Unifying the two is deferred, not an oversight -- a duplicate-destination override may warrant different (or stricter) semantics than `--force`'s "write it anyway."
 - **`PackOp.total_bytes` is a `cached_property`.** Single source of truth for preflight + progress sizing. Don't stat shards elsewhere; read `op.total_bytes`.
 - **Public API lives in `hfutils/__init__.py`.** When adding a new primitive used externally, re-export it there.
 - **Sub-app pattern**: providers/<name>.py (client) + commands/<name>.py (typer sub-app) + register in `cli.py` via `app.add_typer()`.

@@ -1,4 +1,4 @@
-Last updated: 2026-06-26
+Last updated: 2026-07-10
 
 # hfutils
 
@@ -93,6 +93,9 @@ hfutils convert <sharded_dir> --to single --out <output.safetensors>
 
 # Merge one component of a pipeline without drilling into the subdir
 hfutils convert <pipeline_dir> --to single --out <output.safetensors> --component transformer
+
+# Write anyway even though a component is incomplete/corrupt or missing entirely
+hfutils convert <pipeline_dir> --to comfyui --root <root> --force
 ```
 
 ## Source shapes
@@ -104,6 +107,18 @@ hfutils convert <pipeline_dir> --to single --out <output.safetensors> --componen
 - **Single `.safetensors` file** (`SafetensorsFileSource`) — e.g. fused quantized checkpoints.
 - **GGUF file** (`GgufFileSource`) — recognized for inspection; shows rope parameters, token ids, and chat template.
 - **Pytorch directory** (`PytorchDirSource`) — legacy `.bin` / `.pt` / `.pth`. Recognized and reported; not convertible today.
+
+## Incomplete or missing sources
+
+`convert` refuses to write a component that's missing shards, corrupt, or absent
+entirely (e.g. an interrupted download) -- writing anyway would silently produce
+a truncated or partial output with no error. `--dry-run` surfaces these problems
+without writing anything; pass `--force` to write regardless (still prints a
+warning per broken/missing component). `--verify` re-reads whatever was written
+and confirms it matches the plan tensor-for-tensor, but note that only tells you
+the output matches what was actually written -- it can't tell you the source was
+complete, so a `--verify` pass after `--force` still carries a caveat about the
+source problem it was forced past.
 
 ## Memory
 
