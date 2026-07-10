@@ -314,6 +314,30 @@ class TestConvertErrorHandling:
         assert "incomplete" in result.output.lower()
         assert (comfy / "diffusion_models/X.safetensors").exists()
 
+    def test_verify_after_force_carries_a_caveat(self, tmp_path):
+        """verify_output can only compare the output against a Manifest
+        derived from what was actually written -- after a --force write of a
+        known-incomplete component it always reports a tensor-level match,
+        since there's nothing to compare against but itself. --verify must
+        not print an unqualified 'Verified' for an op that was forced
+        through despite being broken."""
+        _make_pipeline(tmp_path)
+        shard = tmp_path / "transformer" / "diffusion_pytorch_model-00002-of-00002.safetensors"
+        shard.unlink()
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--force", "--verify",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert (comfy / "diffusion_models/X.safetensors").exists()
+        # transformer -> diffusion_models/X.safetensors (no suffix, unlike
+        # vae/text_encoder's _vae/_te), so this is unambiguous.
+        assert "Verified X.safetensors" in result.output
+        assert "--force" in result.output and "note:" in result.output.lower()
+
     def test_pipeline_missing_entire_component_refuses_to_write(self, tmp_path):
         """A component whose entire shard set failed to download (declared
         in model_index.json, zero weight files on disk) is a worse case

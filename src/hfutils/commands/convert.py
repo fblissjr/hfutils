@@ -238,7 +238,18 @@ def convert(
     manifests = _run_plan(plan, force=force)
 
     if verify:
-        results = [verify_and_report(op.dest, manifests[op.dest]) for op in plan.ops]
+        broken_by_dest = {op.dest: op for op in plan.broken_ops()}
+        results = []
+        for op in plan.ops:
+            ok = verify_and_report(op.dest, manifests[op.dest])
+            broken_source = broken_by_dest.get(op.dest)
+            if ok and broken_source is not None:
+                console.print(
+                    f"[yellow]note:[/yellow] {op.dest.name} was written with --force despite "
+                    f"{broken_source.problem} -- tensor-level verify only confirms the output "
+                    f"matches what was actually written, not that the source was complete."
+                )
+            results.append(ok)
         if not all(results):
             raise typer.Exit(2)
 
