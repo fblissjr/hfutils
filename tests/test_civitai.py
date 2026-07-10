@@ -254,6 +254,31 @@ class TestCivitaiClient:
         assert "civitai.red" in req.full_url
 
 
+class TestSearchCli:
+    """`civitai search` had its own bare `except Exception`, inconsistent
+    with `info`/`dl` routing through `_api_call`'s narrower
+    (OSError, ValueError) catch -- now it shares the same path."""
+
+    def test_network_error_reported_cleanly(self):
+        runner = CliRunner()
+        import urllib.error
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("boom")):
+            result = runner.invoke(app, ["civitai", "search", "some query"])
+
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, urllib.error.URLError)
+        assert "Error" in result.output
+
+    def test_no_results_message(self):
+        runner = CliRunner()
+        with patch("urllib.request.urlopen", return_value=_mock_response({"items": []})):
+            result = runner.invoke(app, ["civitai", "search", "some query"])
+
+        assert result.exit_code == 0, result.output
+        assert "No results found" in result.output
+
+
 class TestDlSidecar:
     """`civitai dl` writes a <file>.civitai.json sidecar after downloading."""
 

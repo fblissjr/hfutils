@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from hfutils.cli_support import cli_guard, fail
 from hfutils.providers.civitai import (
     DEFAULT_HOST,
     CivitaiClient,
@@ -28,17 +29,14 @@ console = Console()
 
 
 @civitai_app.command()
+@cli_guard
 def search(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Max results"),
 ) -> None:
     """Search CivitAI for models."""
     client = CivitaiClient()
-    try:
-        results = client.search(query, limit=limit)
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+    results = _api_call(client.search, query, limit=limit)
 
     if not results:
         console.print("No results found.")
@@ -65,8 +63,7 @@ def _resolve_target(target: str, host: str | None) -> tuple[ModelRef, CivitaiCli
     """Parse `target` and build a client, exiting cleanly on bad input."""
     ref = parse_model_ref(target)
     if ref is None:
-        console.print(f"[red]Error:[/red] Could not parse model reference: {target}")
-        raise typer.Exit(1)
+        fail(f"Could not parse model reference: {target}")
     return ref, CivitaiClient(host=host or ref.host)
 
 
@@ -74,11 +71,11 @@ def _api_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except (OSError, ValueError) as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        fail(str(e))
 
 
 @civitai_app.command()
+@cli_guard
 def info(
     target: str = typer.Argument(..., help="Model ID, URL (civitai.com/.red), or AIR URN"),
     host: str | None = typer.Option(None, "--host", help="API host override (e.g. civitai.com, civitai.red)"),
@@ -107,6 +104,7 @@ def info(
 
 
 @civitai_app.command()
+@cli_guard
 def dl(
     target: str = typer.Argument(..., help="Model ID, URL (civitai.com/.red), or AIR URN"),
     output: Path = typer.Option(".", "--output", "-o", help="Output directory"),
@@ -138,8 +136,7 @@ def dl(
         raise typer.Abort()
 
     if not download_file(dl_info.url, dest, total_size=dl_info.size_bytes, headers=client.auth_headers):
-        console.print(f"[red]Error:[/red] download failed: {dl_info.filename}")
-        raise typer.Exit(1)
+        fail(f"download failed: {dl_info.filename}")
     _write_sidecar(dl_info, dest)
 
 
