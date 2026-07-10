@@ -2,12 +2,15 @@
 
 from pathlib import Path
 
+import pytest
+import typer
 from rich.console import Console
 
 from hfutils.inspect.architecture import ArchitectureInfo
 from hfutils.inspect.common import SafetensorsHeader, TensorInfo
-from hfutils.inspect.views import display_directory, display_safetensors
+from hfutils.inspect.views import display_directory, display_safetensors, display_source
 from hfutils.sources.detect import detect_source
+from hfutils.sources.types import UnknownSource
 
 
 def _capture(fn, *args, **kwargs) -> str:
@@ -73,3 +76,17 @@ class TestDisplayDirectory:
         assert "No model files or config found" not in out
         assert "Files: 1" in out
         assert "Total size" in out
+
+
+class TestDisplaySourceUnknown:
+    def test_unknown_source_fails_cleanly(self, tmp_path, capsys):
+        src = UnknownSource(path=tmp_path / "nope")
+        console = Console(record=True, width=200)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            display_source(src, False, console)
+
+        assert exc_info.value.exit_code == 1
+        # fail() prints through cli_support's own console, not the caller's
+        # -- matching every other use of fail() in the codebase.
+        assert "Error" in capsys.readouterr().out

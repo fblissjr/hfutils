@@ -10,6 +10,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from hfutils.cli_support import fail
 from hfutils.inspect.architecture import detect_architecture
 from hfutils.inspect.common import SafetensorsHeader, format_params, format_size
 from hfutils.sources.detect import detect_source, enrich
@@ -200,9 +201,7 @@ def display_source(source: Source, detail: bool, console: Console) -> None:
         case PipelineSource():
             display_pipeline(source, detail, console)
         case UnknownSource(path=p):
-            import typer
-            console.print(f"[red]Error:[/red] could not classify {p}")
-            raise typer.Exit(1)
+            fail(f"could not classify {p}")
 
 
 def status_label(src: Source) -> str:
