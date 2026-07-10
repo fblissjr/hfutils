@@ -9,11 +9,11 @@ from hfutils.providers.download import download_file, get_file_metadata
 class _FakeResponse:
     """Minimal fake HTTP response for testing."""
 
-    def __init__(self, data: bytes, headers: dict | None = None, url: str = ""):
+    def __init__(self, data: bytes, headers: dict | None = None, url: str = "", status: int = 200):
         self._data = io.BytesIO(data)
         self.headers = headers or {}
         self.url = url
-        self.status = 200
+        self.status = status
 
     def read(self, n=-1):
         return self._data.read(n)
@@ -52,7 +52,7 @@ class TestDownloadFile:
         dest.write_bytes(b"A" * 300)
         remaining = b"B" * 200
 
-        with patch("urllib.request.urlopen", return_value=_FakeResponse(remaining)) as mock_open:
+        with patch("urllib.request.urlopen", return_value=_FakeResponse(remaining, status=206)) as mock_open:
             result = download_file("https://example.com/file", dest, total_size=500)
 
         assert result is True
@@ -60,6 +60,33 @@ class TestDownloadFile:
         # Verify Range header was set
         req = mock_open.call_args[0][0]
         assert req.get_header("Range") == "bytes=300-"
+
+    def test_restarts_when_server_ignores_range(self, tmp_path):
+        """A server/CDN that doesn't honor Range returns 200 with the full
+        body instead of 206 with just the remainder -- appending that after
+        the existing partial bytes would corrupt the file. Must restart
+        from scratch instead."""
+        dest = tmp_path / "model.safetensors"
+        dest.write_bytes(b"A" * 300)
+        full_body = b"C" * 500
+
+        with patch("urllib.request.urlopen", return_value=_FakeResponse(full_body, status=200)):
+            result = download_file("https://example.com/file", dest, total_size=500)
+
+        assert result is True
+        assert dest.read_bytes() == full_body
+
+    def test_resume_message_uses_format_size(self, tmp_path, capsys):
+        dest = tmp_path / "model.safetensors"
+        dest.write_bytes(b"A" * 300)
+        remaining = b"B" * 200
+
+        with patch("urllib.request.urlopen", return_value=_FakeResponse(remaining, status=206)):
+            download_file("https://example.com/file", dest, total_size=500, show_progress=False)
+
+        out = capsys.readouterr().out
+        assert "300 B" in out
+        assert " MB" not in out
 
     def test_returns_false_on_error(self, tmp_path):
         dest = tmp_path / "model.safetensors"

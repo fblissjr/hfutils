@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from hfutils.inspect.common import format_size
 from hfutils.io.progress import make_progress
 
 console = Console()
@@ -66,19 +67,28 @@ def download_file(
         if start_byte > 0:
             req.add_header("Range", f"bytes={start_byte}-")
             mode = "ab"
-            console.print(f"Resuming from {start_byte / (1 << 20):.1f} MB...")
+            console.print(f"Resuming from {format_size(start_byte)}...")
 
     try:
-        with urllib.request.urlopen(req) as resp, open(dest, mode) as f:
-            if show_progress and total_size > 0:
-                with make_progress(console) as progress:
-                    task = progress.add_task("Downloading", total=total_size, completed=start_byte)
+        with urllib.request.urlopen(req) as resp:
+            if mode == "ab" and resp.status != 206:
+                # Server/CDN ignored our Range request and returned the full
+                # body -- appending it after the existing bytes would
+                # corrupt the file, so restart from scratch instead.
+                console.print("[yellow]warn:[/yellow] server ignored resume request; restarting download")
+                mode = "wb"
+                start_byte = 0
+
+            with open(dest, mode) as f:
+                if show_progress and total_size > 0:
+                    with make_progress(console) as progress:
+                        task = progress.add_task("Downloading", total=total_size, completed=start_byte)
+                        while chunk := resp.read(256 * 1024):
+                            f.write(chunk)
+                            progress.advance(task, len(chunk))
+                else:
                     while chunk := resp.read(256 * 1024):
                         f.write(chunk)
-                        progress.advance(task, len(chunk))
-            else:
-                while chunk := resp.read(256 * 1024):
-                    f.write(chunk)
 
         console.print("Download complete.")
         return True
