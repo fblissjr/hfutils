@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 
 from hfutils.cli_support import cli_guard, fail, verify_and_report
+from hfutils.errors import LoraConvertError
 from hfutils.events import RichMergeObserver
 from hfutils.formats.lora import (
     LORA_SCHEMES,
@@ -23,7 +24,7 @@ from hfutils.formats.lora import (
     detect_lora_scheme,
     fuse_lora,
 )
-from hfutils.inspect.safetensors import RawHeader, read_raw_header
+from hfutils.inspect.safetensors import RawHeader, read_raw_header_or_raise
 from hfutils.io.fs import check_free_space
 from hfutils.io.progress import make_progress
 
@@ -88,10 +89,7 @@ def convert(
     if not source.is_file():
         fail(f"input not found: {source}")
 
-    try:
-        header = read_raw_header(source)
-    except (ValueError, OSError) as e:
-        fail(f"could not read safetensors header: {e}")
+    header = read_raw_header_or_raise(source, error_cls=LoraConvertError)
 
     resolved = _resolve_scheme(header, scheme)
     if scheme != "auto" and not resolved.matches(header) and not force:
@@ -146,10 +144,7 @@ def fuse(
         if not path.is_file():
             fail(f"{label} not found: {path}")
 
-    try:
-        header = read_raw_header(lora)
-    except (ValueError, OSError) as e:
-        fail(f"could not read LoRA header: {e}")
+    header = read_raw_header_or_raise(lora, error_cls=LoraConvertError)
 
     resolved = _resolve_scheme(header, scheme)
     if resolved.to_base_key is None:

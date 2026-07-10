@@ -6,7 +6,7 @@ from pathlib import Path
 import orjson
 import pytest
 
-from hfutils.inspect.safetensors import read_header
+from hfutils.inspect.safetensors import read_header, read_raw_header_or_raise
 from hfutils.inspect.common import SafetensorsHeader, TensorInfo
 
 
@@ -129,3 +129,36 @@ class TestDtypeSizes:
         bit-packed -- same width as U8/I8."""
         t = TensorInfo(name="mask", shape=[8], dtype="BOOL")
         assert t.size_bytes == 8
+
+
+class TestReadRawHeaderOrRaise:
+    """Shared malformed-header-translation helper -- formats/safetensors.py
+    and formats/lora.py each hand-rolled their own identical version of
+    this before; this is the one they should both call instead."""
+
+    def test_returns_header_on_success(self, tmp_path):
+        header_dict = {"w": {"dtype": "F16", "shape": [2], "data_offsets": [0, 4]}}
+        path = _make_safetensors(tmp_path, header_dict)
+
+        class _CustomError(Exception):
+            pass
+
+        raw = read_raw_header_or_raise(path, error_cls=_CustomError)
+        assert len(raw.tensors) == 1
+
+    def test_translates_malformed_file_to_error_cls(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")  # shorter than the 8-byte length prefix
+
+        class _CustomError(Exception):
+            pass
+
+        with pytest.raises(_CustomError):
+            read_raw_header_or_raise(bad, error_cls=_CustomError)
+
+    def test_default_error_cls_is_oserror(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+
+        with pytest.raises(OSError):
+            read_raw_header_or_raise(bad)

@@ -100,6 +100,20 @@ class TestLoraConvert:
         assert result.exit_code != 0
         assert "not found" in result.output
 
+    def test_malformed_header_reported_cleanly(self, tmp_path):
+        """A file that exists but is too short to be a real safetensors
+        file must exit cleanly, not crash with a raw traceback -- exercises
+        the shared read_raw_header_or_raise path now that this command
+        relies on cli_guard instead of a local try/except."""
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+
+        result = runner.invoke(app, ["lora", "convert", str(bad)])
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Error" in result.output
+
 
 class TestLoraSchemes:
     def test_lists_krea2(self):
@@ -130,6 +144,20 @@ class TestLoraFuse:
         ])
         assert result.exit_code != 0
         assert "not found" in result.output
+
+    def test_fuse_malformed_lora_header_reported_cleanly(self, tmp_path):
+        bad = tmp_path / "bad.safetensors"
+        bad.write_bytes(b"\x00\x00\x00")
+        base = tmp_path / "base.safetensors"
+        make_krea2_base(base)
+
+        result = runner.invoke(app, [
+            "lora", "fuse", str(bad), str(base), "-o", str(tmp_path / "out.safetensors"),
+        ])
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Error" in result.output
 
     def test_fuse_refuses_insufficient_space(self, tmp_path, monkeypatch):
         """fuse() writes a full base-checkpoint-sized output with no

@@ -71,6 +71,18 @@ def read_raw_header(path: Path) -> RawHeader:
     )
 
 
+def read_raw_header_or_raise(path: Path, error_cls: type[Exception] = OSError) -> RawHeader:
+    """`read_raw_header`, translating malformed-input errors (`ValueError`,
+    `OSError`, `orjson.JSONDecodeError`) into `error_cls` -- so a caller that
+    needs a specific `HfutilsError` subclass (`StreamMergeError`,
+    `LoraConvertError`, ...) gets one directly, instead of hand-rolling the
+    same try/except at every call site."""
+    try:
+        return read_raw_header(path)
+    except (ValueError, OSError, orjson.JSONDecodeError) as e:
+        raise error_cls(f"could not read header of {path}: {e}") from e
+
+
 def read_header(path: Path) -> SafetensorsHeader:
     """Read and parse the header from a safetensors file.
 
