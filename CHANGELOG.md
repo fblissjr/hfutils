@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0
+
+### Breaking
+
+- **`SourceError` and `VerificationError` removed** from the error hierarchy and top-level exports. Both were declared but never raised anywhere -- dead API surface.
+
+### Added
+
+- **`hfutils convert --force`**: writes an incomplete/corrupt source anyway instead of refusing (the 0.9.0 hard-stop's default is still to refuse). Never silent about it -- each forced op still prints a warning. `PlanRunner.run(plan, force=True)` for library consumers.
+
+### Fixed
+
+- **`resolve_download`** (CivitAI provider) raised a raw `KeyError` on a CivitAI API response missing an expected key (e.g. `downloadUrl`) -- now raises `ValueError`, which `_api_call` already catches, so a malformed/changed API response reports cleanly instead of crashing. `civitai info`'s own dict indexing gets the same treatment.
+- **`fuse_lora`**'s `st_load`/`safe_open` (the actual torch-side safetensors loading) raised a raw `safetensors.SafetensorError` on a corrupt file -- neither caught by `cli_guard` nor by our own header validation, since `read_raw_header` only parses the JSON header, not the data region (a file truncated just past the header passes our check but fails theirs). Both call sites now re-raise as `LoraConvertError`.
+
+### Internal
+
+- `fuse_lora`'s `dict[str, dict[str, object]]` tightened to `dict[str, dict[str, torch.Tensor]]` (`TYPE_CHECKING`-guarded import; `torch` stays a lazy runtime import for the `[ml]` extra) -- closes the type-checking gap that let the 0.9.0 unchecked-matmul rank bug go unnoticed.
+
 ## 0.9.0
 
 ### Fixed
