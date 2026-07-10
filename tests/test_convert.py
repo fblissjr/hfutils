@@ -5,6 +5,7 @@ from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
 from hfutils.cli import app
+from hfutils.errors import StreamMergeError
 from tests.conftest import make_diffusers_pipeline as _make_pipeline
 from tests.conftest import make_sharded_component as _make_sharded
 
@@ -195,6 +196,47 @@ class TestConvertToSingle:
         assert result.exit_code == 0, result.output
         assert "DRY RUN" in result.output
         assert not out.exists()
+
+
+class TestConvertErrorHandling:
+    def test_streammergeerror_reported_cleanly_not_as_traceback(self, tmp_path):
+        """A real StreamMergeError (duplicate tensor name across shards)
+        escaping PlanRunner.run() must be caught and reported cleanly, not
+        crash with a raw traceback -- previously nothing wrapped this call."""
+        src_dir = tmp_path / "colliding"
+        src_dir.mkdir()
+        save_file({"w": torch.randn(2, 2)}, src_dir / "shard-00001.safetensors")
+        save_file({"w": torch.randn(2, 2)}, src_dir / "shard-00002.safetensors")
+        out = tmp_path / "out.safetensors"
+
+        result = runner.invoke(app, [
+            "convert", str(src_dir), "--to", "single", "--out", str(out),
+        ])
+
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, StreamMergeError)
+        assert "Error" in result.output
+        assert "uplicate" in result.output
+
+    def test_verify_checks_all_ops_not_just_first_failure(self, tmp_path, monkeypatch):
+        """The old `all(_verify_written(...) for op in plan.ops)` short-
+        circuited on the first failing op in a multi-component plan,
+        silently skipping verification (and printing) for the rest."""
+        _make_pipeline(tmp_path)
+        comfy = tmp_path / "comfy"
+
+        monkeypatch.setattr(
+            "hfutils.cli_support.verify_output",
+            lambda dest, manifest: (False, "forced mismatch"),
+        )
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--verify",
+        ])
+
+        assert result.exit_code == 2
+        assert result.output.count("forced mismatch") >= 2
 
 
 class TestConvertValidation:

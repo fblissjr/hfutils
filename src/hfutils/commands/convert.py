@@ -16,9 +16,10 @@ import typer
 from rich.console import Console
 
 from hfutils.cli import app
-from hfutils.errors import InsufficientSpaceError, PlanError
+from hfutils.cli_support import cli_guard, fail, verify_and_report
+from hfutils.errors import PlanError
 from hfutils.events import RichObserver
-from hfutils.formats.safetensors import Manifest, verify_output
+from hfutils.formats.safetensors import Manifest
 from hfutils.inspect.summary import format_summary_lines, summarize_component
 from hfutils.io.fs import check_free_space
 from hfutils.layouts.comfyui import ConvertTarget, PackOp, plan_comfyui, plan_single
@@ -51,21 +52,16 @@ def _warn(msg: str) -> None:
     console.print(f"[yellow]warn:[/yellow] {msg}")
 
 
-def _error(msg: str) -> None:
-    console.print(f"[red]Error:[/red] {msg}")
-
-
 def _preflight_space(ops: list[PackOp]) -> None:
-    """Refuse to start if any destination filesystem lacks space."""
+    """Refuse to start if any destination filesystem lacks space.
+
+    Raises InsufficientSpaceError straight through to cli_guard -- no local
+    try/except needed."""
     by_root: dict[Path, int] = defaultdict(int)
     for op in ops:
         by_root[op.dest.parent] += op.total_bytes
     for root, required in by_root.items():
-        try:
-            check_free_space(root, required)
-        except InsufficientSpaceError as e:
-            _error(str(e))
-            raise typer.Exit(1)
+        check_free_space(root, required)
 
 
 def _print_plan(plan: PackPlan, dry_run: bool) -> None:
@@ -82,15 +78,6 @@ def _print_op_preview(op: PackOp) -> None:
         console.print(line)
 
 
-def _verify_written(dest: Path, manifest: Manifest) -> bool:
-    ok, error = verify_output(dest, manifest)
-    if not ok:
-        _error(f"verify {dest.name}: {error}")
-        return False
-    console.print(f"[green]Verified[/green] {dest.name}: {len(manifest)} tensors match.")
-    return True
-
-
 def _run_plan(plan: PackPlan) -> dict[Path, Manifest]:
     return PlanRunner(RichObserver(console)).run(plan)
 
@@ -101,8 +88,7 @@ def _default_name(source: Source) -> str:
 
 def _require_option(value, flag: str, layout: str) -> None:
     if value is None:
-        _error(f"`--to {layout}` requires {flag}.")
-        raise typer.Exit(1)
+        fail(f"`--to {layout}` requires {flag}.")
 
 
 # --------------------------------------------------------------------------
@@ -127,8 +113,7 @@ def _plan_comfyui_from_cli(
             only=only or None, skip=skip or None, target=target,
         )
     except PlanError as e:
-        _error(str(e))
-        raise typer.Exit(1)
+        fail(str(e))
 
 
 def _plan_single_from_cli(
@@ -142,32 +127,27 @@ def _plan_single_from_cli(
     if isinstance(src, PipelineSource):
         if component is None:
             available = ", ".join(src.components) or "(none detected)"
-            _error(
+            fail(
                 f"source is a diffusers pipeline; "
                 f"pass --component to pick one. Available: {available}"
             )
-            raise typer.Exit(1)
         if component not in src.components:
             available = ", ".join(src.components) or "(none detected)"
-            _error(
+            fail(
                 f"component '{component}' not found in pipeline. "
                 f"Available: {available}"
             )
-            raise typer.Exit(1)
         src = detect_source(source_path / component)
         if not isinstance(src, (ComponentSource, SafetensorsFileSource)):
-            _error(f"component '{component}' has no safetensors to merge.")
-            raise typer.Exit(1)
+            fail(f"component '{component}' has no safetensors to merge.")
     elif not isinstance(src, (ComponentSource, SafetensorsFileSource)):
-        _error(
+        fail(
             f"`--to single` expects a component directory, a "
             f"single .safetensors file, or a diffusers pipeline (with --component); "
             f"got {type(src).__name__}."
         )
-        raise typer.Exit(1)
     elif component is not None:
-        _error("--component only applies when source is a diffusers pipeline.")
-        raise typer.Exit(1)
+        fail("--component only applies when source is a diffusers pipeline.")
 
     return plan_single(src, out)  # type: ignore[arg-type]
 
@@ -178,6 +158,7 @@ def _plan_single_from_cli(
 
 
 @app.command()
+@cli_guard
 def convert(
     source: Path = typer.Argument(..., help="Diffusers pipeline, component dir, or .safetensors file"),
     to: ConvertLayout = typer.Option(
@@ -208,8 +189,7 @@ def convert(
     """Convert a local model. `--to` picks the target layout."""
     src = detect_source(source)
     if isinstance(src, UnknownSource):
-        _error(f"unrecognized source: {source}")
-        raise typer.Exit(1)
+        fail(f"unrecognized source: {source}")
 
     if to == ConvertLayout.COMFYUI:
         plan = _plan_comfyui_from_cli(
@@ -221,8 +201,7 @@ def convert(
         done_message = f"Wrote {out}"
 
     if not plan:
-        console.print("[yellow]Nothing to pack[/yellow] (no matching components found)")
-        raise typer.Exit(1)
+        fail("Nothing to pack (no matching components found)")
 
     for problem in plan.validate():
         _warn(problem)
@@ -239,7 +218,8 @@ def convert(
     manifests = _run_plan(plan)
 
     if verify:
-        if not all(_verify_written(op.dest, manifests[op.dest]) for op in plan.ops):
+        results = [verify_and_report(op.dest, manifests[op.dest]) for op in plan.ops]
+        if not all(results):
             raise typer.Exit(2)
 
     console.print(f"\n[green]Done.[/green] {done_message}")
