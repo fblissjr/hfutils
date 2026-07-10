@@ -7,7 +7,7 @@ import orjson
 import pytest
 
 from hfutils.inspect.safetensors import read_header
-from hfutils.inspect.common import SafetensorsHeader
+from hfutils.inspect.common import SafetensorsHeader, TensorInfo
 
 
 def _make_safetensors(tmp: Path, header_dict: dict) -> Path:
@@ -121,3 +121,11 @@ class TestReadHeader:
         result = read_header(path)
         assert len(result.tensors) == 0
         assert result.total_params == 0
+
+
+class TestDtypeSizes:
+    def test_bool_is_one_byte_per_element(self):
+        """Safetensors stores BOOL as a full byte per element (bitsize=8), not
+        bit-packed -- same width as U8/I8."""
+        t = TensorInfo(name="mask", shape=[8], dtype="BOOL")
+        assert t.size_bytes == 8

@@ -44,7 +44,7 @@ def format_params(count: int) -> str:
 
 
 # Bytes per element for each dtype
-DTYPE_SIZES: dict[str, float] = {
+DTYPE_SIZES: dict[str, int] = {
     "F64": 8,
     "F32": 4,
     "BF16": 2,
@@ -56,7 +56,7 @@ DTYPE_SIZES: dict[str, float] = {
     "I16": 2,
     "I8": 1,
     "U8": 1,
-    "BOOL": 0.125,
+    "BOOL": 1,
 }
 
 
