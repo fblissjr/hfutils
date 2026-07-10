@@ -48,13 +48,16 @@ def search(
     table.add_column("Type")
     table.add_column("Creator")
 
-    for item in results:
-        table.add_row(
-            str(item["id"]),
-            item["name"],
-            item.get("type", ""),
-            item.get("creator", {}).get("username", ""),
-        )
+    try:
+        for item in results:
+            table.add_row(
+                str(item["id"]),
+                item["name"],
+                item.get("type", ""),
+                item.get("creator", {}).get("username", ""),
+            )
+    except KeyError as e:
+        fail(f"unexpected CivitAI API response shape: missing {e}")
 
     console.print(table)
 

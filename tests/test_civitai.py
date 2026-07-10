@@ -226,6 +226,29 @@ class TestCivitaiClient:
             with pytest.raises(ValueError, match="downloadUrl"):
                 client.resolve_download(12345)
 
+    def test_resolve_download_explicit_null_sizekb_raises_valueerror(self):
+        """dict.get(key, default) only substitutes the default for a
+        *missing* key, not a present key whose value is explicit JSON null.
+        `int(primary.get("sizeKB", 0))` -> int(None) raises TypeError, which
+        the except KeyError block didn't catch."""
+        model_data = {
+            "id": 12345,
+            "name": "Malformed",
+            "modelVersions": [
+                {
+                    "id": 100,
+                    "name": "v1.0",
+                    "files": [{"name": "m.safetensors", "sizeKB": None, "primary": True}],
+                    "downloadUrl": "https://civitai.com/api/download/models/100",
+                }
+            ],
+        }
+        client = CivitaiClient()
+
+        with patch("urllib.request.urlopen", return_value=_mock_response(model_data)):
+            with pytest.raises(ValueError):
+                client.resolve_download(12345)
+
     def test_resolve_download_unknown_version_id_raises(self):
         model_data = {
             "id": 12345,
@@ -300,6 +323,20 @@ class TestSearchCli:
 
         assert result.exit_code == 0, result.output
         assert "No results found" in result.output
+
+    def test_malformed_result_item_reported_cleanly(self):
+        """A search result missing 'id' or 'name' must not crash with a raw
+        KeyError -- cli_guard doesn't catch bare KeyError, and this loop had
+        no guard of its own, unlike info()'s identical-shape risk."""
+        runner = CliRunner()
+        results = {"items": [{"type": "LORA"}]}  # no "id", no "name"
+
+        with patch("urllib.request.urlopen", return_value=_mock_response(results)):
+            result = runner.invoke(app, ["civitai", "search", "some query"])
+
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, KeyError)
+        assert "Error" in result.output
 
 
 class TestInfoCli:

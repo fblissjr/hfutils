@@ -117,9 +117,9 @@ class CivitaiClient:
                 base_model=version.get("baseModel"),
                 description=model.get("description"),
             )
-        except KeyError as e:
+        except (KeyError, TypeError) as e:
             raise ValueError(
-                f"unexpected CivitAI API response shape for model {model_id}: missing {e}"
+                f"unexpected CivitAI API response shape for model {model_id}: {e}"
             ) from e
 
 
