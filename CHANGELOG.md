@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.0
+
+### Fixed
+
+- **Silent data corruption**: converting a diffusers pipeline with an interrupted download (missing shard, index.json present) previously merged what was present into a syntactically valid but incomplete output file with zero warning. `PlanRunner` now refuses the whole plan with a clear error before writing anything.
+- **`civitai dl`** reported success and wrote a metadata sidecar even when the download failed (`download_file` returns `False` on failure rather than always raising).
+- **`convert`**: a real `StreamMergeError`/`OSError` escaping a merge (e.g. a colliding tensor name, a truncated shard header) previously crashed with a raw traceback -- no error handling wrapped the write path at all.
+- **Disk-space preflight** undercounted multi-folder plans: destinations sharing one physical disk were each checked against the same undiminished free-space total instead of a shared budget. `lora fuse` had no preflight check at all despite writing a full base-checkpoint-sized file.
+- **`DTYPE_SIZES["BOOL"]`** was `0.125` (bit-packed) instead of `1` (safetensors stores `BOOL` as a full byte) -- an 8x size-reporting error for any checkpoint with boolean tensors.
+- **`inspect`**'s `display_directory` always hit the "no files found" path for legacy `.bin`/`.pt`/`.pth` components, even printing a false negative when files were present.
+- **`download_file`** didn't verify a server actually honored a `Range` resume request before appending -- a server that ignored it and returned the full body would silently corrupt the resumed file.
+- **`fuse_lora`**: a LoRA module with only one of `lora_A`/`lora_B` present was silently dropped with no warning; mismatched A/B factor shapes crashed with a raw torch error instead of `LoraConvertError`.
+- A multi-op `--verify` run silently stopped checking (and reporting) after the first failing op instead of reporting all of them.
+
+### Internal
+
+- New `hfutils.cli_support` module (`fail`, `cli_guard`, `verify_and_report`) replaces ~27 hand-copied try/except-print-exit blocks across `commands/*.py` with one shared, tested implementation.
+- `io/progress.stream_region` + `unlink_on_error` replace a duplicated bounded-copy loop (`stream_merge` vs. `formats/lora._stream_region`) and add cleanup of partially-written output files on failure across `stream_merge`, `convert_lora_keys`, and `fuse_lora`.
+
 ## 0.8.0
 
 ### Breaking
