@@ -147,16 +147,16 @@ def display_directory(src: ComponentSource | PytorchDirSource, detail: bool, con
     if view.config:
         _display_config_fields(view.config, console)
 
-    shards = src.shards if isinstance(src, ComponentSource) else []
-    if not shards and not view.gguf_info:
+    files = src.shards if isinstance(src, ComponentSource) else src.files
+    if not files:
         if not view.config:
             console.print("  No model files or config found.")
         return
 
-    console.print(f"  Files: {len(shards) + (1 if view.gguf_info else 0)}")
+    console.print(f"  Files: {len(files)}")
     console.print(f"  Total size: {format_size(view.total_file_size)}")
     if isinstance(src, ComponentSource) and src.sharded:
-        console.print(f"  Sharded: {len(shards)} shards")
+        console.print(f"  Sharded: {len(files)} shards")
 
     if view.safetensors_headers:
         combined = SafetensorsHeader.combine(view.safetensors_headers)
