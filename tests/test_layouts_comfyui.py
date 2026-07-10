@@ -13,7 +13,6 @@ from hfutils.layouts.comfyui import (
     ConvertTarget,
     PackOp,
     plan_comfyui,
-    plan_single,
 )
 from hfutils.sources.detect import detect_source
 from tests.conftest import make_diffusers_pipeline as _make_full_pipeline
@@ -197,3 +196,80 @@ class TestPlanComfyuiIncompleteDetection:
 
         assert plan.ops[0].problem is not None
         assert "truncated" in plan.ops[0].problem.lower()
+
+
+class TestPlanComfyuiMissingComponents:
+    def _pipeline_missing_vae(self, tmp: Path) -> None:
+        """model_index.json declares vae, but the vae/ directory never
+        made it to disk at all -- total component loss (e.g. every shard's
+        download failed), not partial."""
+        (tmp / "model_index.json").write_bytes(orjson.dumps({
+            "_class_name": "P",
+            "transformer": ["diffusers", "T"],
+            "vae": ["diffusers", "AutoencoderKL"],
+            "text_encoder": ["transformers", "E"],
+            "scheduler": ["diffusers", "S"],
+            "tokenizer": ["transformers", "Tok"],
+        }))
+        for name in ("transformer", "text_encoder"):
+            (tmp / name).mkdir()
+            save_file({"w": torch.randn(2, 2)}, tmp / name / "model.safetensors")
+
+    def test_declared_but_entirely_absent_component_is_flagged(self, tmp_path):
+        self._pipeline_missing_vae(tmp_path)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        assert plan.missing == ["vae"]
+        # transformer/text_encoder still convert normally
+        assert sorted(op.label for op in plan.ops) == ["text_encoder", "transformer"]
+
+    def test_scheduler_and_tokenizer_never_count_as_missing(self, tmp_path):
+        """scheduler/tokenizer are legitimately weight-less -- must not be
+        flagged as missing just because they have no .safetensors files."""
+        self._pipeline_missing_vae(tmp_path)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        assert "scheduler" not in plan.missing
+        assert "tokenizer" not in plan.missing
+
+    def test_complete_pipeline_has_no_missing(self, tmp_path):
+        _make_full_pipeline(tmp_path)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        assert plan.missing == []
+
+    def test_skip_suppresses_missing_for_intentionally_excluded_component(self, tmp_path):
+        """--skip vae on a pipeline missing vae shouldn't hard-stop on a
+        component the user explicitly opted out of."""
+        self._pipeline_missing_vae(tmp_path)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X", skip=["vae"])
+
+        assert plan.missing == []
+
+    def test_only_suppresses_missing_for_components_not_requested(self, tmp_path):
+        self._pipeline_missing_vae(tmp_path)
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X", only=["transformer"])
+
+        assert plan.missing == []
+
+    def test_unreadable_model_index_fails_open(self, tmp_path):
+        """A malformed model_index.json (read_json_if_exists returns None)
+        must not crash or spuriously flag every component as missing."""
+        (tmp_path / "model_index.json").write_bytes(b"not valid json")
+        (tmp_path / "transformer").mkdir()
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "transformer" / "model.safetensors")
+        src = detect_source(tmp_path)
+
+        plan = plan_comfyui(src, tmp_path / "comfy", name="X")
+
+        assert plan.missing == []

@@ -36,21 +36,30 @@ class PlanRunner:
         / OSError / etc. on failure -- caller handles user-facing messaging.
 
         Raises `PlanError` before anything runs (not even `on_plan_start`) if
-        any op is incomplete/corrupt (`plan.broken_ops()`) -- writing what's
-        present would silently produce a syntactically valid but
-        semantically broken output with no exception to catch it later.
+        any op is incomplete/corrupt (`plan.broken_ops()`) or a declared
+        pipeline component is missing entirely (`plan.missing`) -- writing
+        what's present would silently produce a syntactically valid but
+        semantically broken (or incomplete) result with no exception to
+        catch it later.
 
-        `force=True` is an explicit opt-in to write the broken op(s) anyway;
-        each one is still reported via `on_op_warning` before execution, so
-        overriding the safety net is never silent.
+        `force=True` is an explicit opt-in to write anyway; each broken op is
+        still reported via `on_op_warning` before execution, so overriding
+        the safety net is never silent. `plan.missing` has no corresponding
+        `PackOp` to attach a warning to -- callers that print human-readable
+        output (the CLI) are expected to surface it themselves before
+        calling `run()`, the same way `plan.validate()`'s advisory problems
+        already are.
 
         `on_plan_complete` is invoked in a finally, so observers that hold
         resources (e.g. RichObserver owns a rich Progress context) tear down
         cleanly even if an op raises partway through."""
         broken = plan.broken_ops()
-        if broken and not force:
-            details = "; ".join(f"{op.label}: {op.problem}" for op in broken)
-            raise PlanError(f"refusing to write incomplete/corrupt source(s): {details}")
+        if (broken or plan.missing) and not force:
+            parts = []
+            if plan.missing:
+                parts.append(f"missing entirely: {', '.join(plan.missing)}")
+            parts.extend(f"{op.label}: {op.problem}" for op in broken)
+            raise PlanError(f"refusing to write incomplete/corrupt source(s): {'; '.join(parts)}")
 
         self.observer.on_plan_start(plan)
         manifests: dict[Path, Manifest] = {}

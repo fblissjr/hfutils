@@ -17,6 +17,11 @@ class PackPlan:
     source: Source
     # Free-form metadata the planner can stash (e.g. target=`comfyui`, `single`).
     meta: dict[str, str] = field(default_factory=dict)
+    # Pipeline components model_index.json declares but that have zero weight
+    # files on disk at all -- no PackOp is ever built for these, so there's
+    # nothing to attach a per-op `problem` to. A hard stop just like
+    # broken_ops(), enforced alongside it in PlanRunner.run().
+    missing: list[str] = field(default_factory=list)
 
     @property
     def total_bytes(self) -> int:

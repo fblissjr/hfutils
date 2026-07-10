@@ -121,6 +121,39 @@ def _source_problem(src: ComponentSource) -> str | None:
     return _copy_integrity_problem(src.shards)
 
 
+def _missing_components(
+    source: PipelineSource, *, only: list[str] | None, skip: list[str] | None,
+) -> list[str]:
+    """Weight-bearing components (DIFFUSERS_COMPONENTS) model_index.json
+    declares as present -- e.g. `"vae": ["diffusers", "AutoencoderKL"]`, not
+    the `[null, null]` diffusers uses for an unused optional component -- but
+    that have zero weight files anywhere on disk (source.components is
+    purely disk-detected). Catches a component whose entire shard set failed
+    to download, which `_source_problem` can't see since no PackOp is ever
+    built for it.
+
+    Scoped to DIFFUSERS_COMPONENTS, not the wider DIFFUSERS_COMPONENT_NAMES:
+    scheduler/tokenizer are legitimately weight-less and would otherwise
+    always be flagged. Respects --only/--skip the same way the op-building
+    loop does, so an intentionally excluded component isn't a hard stop.
+    Fails open (returns []) on a missing/unreadable model_index.json."""
+    meta = source.pipeline_meta
+    if not meta:
+        return []
+    on_disk = set(source.components)
+    missing: list[str] = []
+    for name in DIFFUSERS_COMPONENTS:
+        if only and name not in only:
+            continue
+        if skip and name in skip:
+            continue
+        entry = meta.get(name)
+        declared = isinstance(entry, (list, tuple)) and any(entry)
+        if declared and name not in on_disk:
+            missing.append(name)
+    return sorted(missing)
+
+
 def _plan_component(
     source: PipelineSource, component: str, comfyui_root: Path, name: str,
 ) -> PackOp | None:
@@ -170,7 +203,8 @@ def plan_comfyui(
                 op = _plan_component(source, component, comfyui_root, name)
                 if op is not None:
                     ops.append(op)
-            return PackPlan(ops=ops, source=source, meta={"target": "comfyui"})
+            missing = _missing_components(source, only=only, skip=skip)
+            return PackPlan(ops=ops, source=source, meta={"target": "comfyui"}, missing=missing)
 
         case ComponentSource(path=p, shards=shards):
             if target is None:

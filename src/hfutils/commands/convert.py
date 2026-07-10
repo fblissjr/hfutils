@@ -221,6 +221,10 @@ def convert(
 
     for problem in plan.validate():
         _warn(problem)
+    if plan.missing:
+        _warn(f"missing entirely (no weight files found): {', '.join(plan.missing)}")
+    for op in plan.broken_ops():
+        _warn(f"{op.label}: {op.problem}")
 
     _print_plan(plan, dry_run)
     for op in plan.ops:

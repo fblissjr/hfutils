@@ -137,3 +137,32 @@ class TestPlanRunner:
             op is broken_op and "incomplete" in message
             for op, message in obs.warnings
         )
+
+    def test_refuses_plan_with_missing_components(self, tmp_path):
+        """A plan whose PackPlan.missing is non-empty (a declared pipeline
+        component with zero weight files on disk) must be refused just like
+        broken_ops(), even though there's no PackOp to attach the problem
+        to."""
+        shard = tmp_path / "in.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        clean_op = PackOp(label="transformer", source=tmp_path, dest=tmp_path / "out.safetensors", shards=[shard])
+        plan = PackPlan(ops=[clean_op], source=detect_source(tmp_path), missing=["vae"])
+        obs = CollectingObserver()
+
+        with pytest.raises(PlanError, match="vae"):
+            PlanRunner(observer=obs).run(plan)
+
+        assert obs.plans_started == []
+        assert not (tmp_path / "out.safetensors").exists()
+
+    def test_force_writes_plan_with_missing_components(self, tmp_path):
+        shard = tmp_path / "in.safetensors"
+        save_file({"w": torch.randn(2, 2)}, shard)
+        out = tmp_path / "out.safetensors"
+        clean_op = PackOp(label="transformer", source=tmp_path, dest=out, shards=[shard])
+        plan = PackPlan(ops=[clean_op], source=detect_source(tmp_path), missing=["vae"])
+
+        manifests = PlanRunner().run(plan, force=True)
+
+        assert out.exists()
+        assert out in manifests

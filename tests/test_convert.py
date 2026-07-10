@@ -257,6 +257,45 @@ class TestConvertErrorHandling:
         assert "incomplete" in result.output.lower()
         assert not comfy.exists()
 
+    def test_dry_run_surfaces_incomplete_component(self, tmp_path):
+        """--dry-run returns before PlanRunner.run() is ever called, so it
+        never used to reach the hard-stop check -- giving a false 'looks
+        fine' signal for a pipeline the real run refuses."""
+        _make_pipeline(tmp_path)
+        shard = tmp_path / "transformer" / "diffusion_pytorch_model-00002-of-00002.safetensors"
+        shard.unlink()
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--dry-run",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "incomplete" in result.output.lower()
+        assert not comfy.exists()
+
+    def test_dry_run_surfaces_missing_component(self, tmp_path):
+        import orjson
+
+        (tmp_path / "model_index.json").write_bytes(orjson.dumps({
+            "_class_name": "P",
+            "transformer": ["diffusers", "T"],
+            "vae": ["diffusers", "AutoencoderKL"],
+        }))
+        (tmp_path / "transformer").mkdir()
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "transformer" / "model.safetensors")
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--dry-run",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "vae" in result.output.lower()
+        assert "missing" in result.output.lower()
+
     def test_incomplete_pipeline_component_force_writes_with_warning(self, tmp_path):
         """--force is an explicit opt-in to convert a known-incomplete
         source anyway -- it must still write, and still warn, not proceed
@@ -273,6 +312,52 @@ class TestConvertErrorHandling:
 
         assert result.exit_code == 0, result.output
         assert "incomplete" in result.output.lower()
+        assert (comfy / "diffusion_models/X.safetensors").exists()
+
+    def test_pipeline_missing_entire_component_refuses_to_write(self, tmp_path):
+        """A component whose entire shard set failed to download (declared
+        in model_index.json, zero weight files on disk) is a worse case
+        than a partial shard loss and must also be refused."""
+        import orjson
+
+        (tmp_path / "model_index.json").write_bytes(orjson.dumps({
+            "_class_name": "P",
+            "transformer": ["diffusers", "T"],
+            "vae": ["diffusers", "AutoencoderKL"],
+        }))
+        (tmp_path / "transformer").mkdir()
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "transformer" / "model.safetensors")
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X",
+        ])
+
+        assert result.exit_code == 1
+        assert "vae" in result.output.lower()
+        assert "missing" in result.output.lower()
+        assert not comfy.exists()
+
+    def test_pipeline_missing_entire_component_force_writes_with_warning(self, tmp_path):
+        import orjson
+
+        (tmp_path / "model_index.json").write_bytes(orjson.dumps({
+            "_class_name": "P",
+            "transformer": ["diffusers", "T"],
+            "vae": ["diffusers", "AutoencoderKL"],
+        }))
+        (tmp_path / "transformer").mkdir()
+        save_file({"w": torch.randn(2, 2)}, tmp_path / "transformer" / "model.safetensors")
+        comfy = tmp_path / "comfy"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "comfyui",
+            "--root", str(comfy), "--name", "X", "--force",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "vae" in result.output.lower()
         assert (comfy / "diffusion_models/X.safetensors").exists()
 
 
