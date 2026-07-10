@@ -137,7 +137,9 @@ def dl(
     if not typer.confirm("\nProceed?", default=True):
         raise typer.Abort()
 
-    download_file(dl_info.url, dest, total_size=dl_info.size_bytes, headers=client.auth_headers)
+    if not download_file(dl_info.url, dest, total_size=dl_info.size_bytes, headers=client.auth_headers):
+        console.print(f"[red]Error:[/red] download failed: {dl_info.filename}")
+        raise typer.Exit(1)
     _write_sidecar(dl_info, dest)
 
 

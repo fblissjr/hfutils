@@ -284,6 +284,7 @@ class TestDlSidecar:
         ), patch("hfutils.commands.civitai.download_file") as mock_dl:
             def _fake_dl(url, dest, total_size, headers):
                 dest.write_bytes(b"x")
+                return True
             mock_dl.side_effect = _fake_dl
 
             result = runner.invoke(
@@ -395,6 +396,25 @@ class TestDlSidecar:
         ), patch("hfutils.commands.civitai.download_file") as mock_dl:
             mock_dl.side_effect = RuntimeError("network exploded")
 
+            result = runner.invoke(
+                app,
+                ["civitai", "dl", "12345", "--output", str(tmp_path)],
+                input="y\n",
+            )
+
+        assert result.exit_code != 0
+        assert not (tmp_path / "model.safetensors.civitai.json").exists()
+
+    def test_no_sidecar_when_download_returns_false(self, tmp_path):
+        """download_file reports failure via a `False` return, not always an
+        exception (it internally catches HTTPError/OSError and returns
+        False) -- dl() must check that return value before writing the
+        sidecar, not just rely on exceptions propagating."""
+        runner = CliRunner()
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_response(self._model_data()),
+        ), patch("hfutils.commands.civitai.download_file", return_value=False):
             result = runner.invoke(
                 app,
                 ["civitai", "dl", "12345", "--output", str(tmp_path)],
