@@ -87,10 +87,16 @@ _FAMILY_RULES: list[tuple[str, list]] = [
         "model.diffusion_model.",
     ]),
 
+    # Qwen-VL (Qwen2-VL / Qwen3-VL): visual.blocks/patch_embed + language model layers
+    ("Qwen-VL", [
+        re.compile(r"^(model\.)?visual\.(blocks|patch_embed|merger)"),
+        re.compile(r"^(model\.)?(language_model\.)?layers\.\d+\."),
+    ]),
+
     # LLM (Llama-style): model.layers.N.self_attn + model.layers.N.mlp
     ("LLM (Llama-style)", [
-        re.compile(r"model\.layers\.\d+\.self_attn\."),
-        re.compile(r"model\.layers\.\d+\.mlp\."),
+        re.compile(r"^model\.(language_model\.)?layers\.\d+\.self_attn\."),
+        re.compile(r"^model\.(language_model\.)?layers\.\d+\.mlp\."),
     ]),
 ]
 

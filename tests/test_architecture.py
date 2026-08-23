@@ -130,6 +130,27 @@ class TestDetectLLM:
         result = detect_architecture(names)
         assert result.family == "LLM (Llama-style)"
 
+    def test_qwen_vl(self):
+        # Qwen3-VL pattern (model.visual.* + model.language_model.layers.*)
+        names = [
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.layers.0.self_attn.q_proj.weight",
+            "model.visual.blocks.0.attn.qkv.weight",
+            "model.visual.patch_embed.proj.weight",
+            "lm_head.weight",
+        ]
+        result = detect_architecture(names)
+        assert result.family == "Qwen-VL"
+
+        # Qwen2-VL pattern (visual.* + model.layers.*)
+        names_qwen2 = [
+            "model.layers.0.self_attn.q_proj.weight",
+            "visual.blocks.0.attn.qkv.weight",
+            "visual.patch_embed.proj.weight",
+        ]
+        result_qwen2 = detect_architecture(names_qwen2)
+        assert result_qwen2.family == "Qwen-VL"
+
     def test_unknown(self):
         names = ["foo.bar.weight", "baz.qux.weight"]
         result = detect_architecture(names)
