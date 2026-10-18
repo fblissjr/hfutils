@@ -1,8 +1,9 @@
-Last updated: 2026-07-10
+Last updated: 2026-10-18
 
 # hfutils
 
 Local model file toolkit for safetensors and GGUF files, with CivitAI downloads, ComfyUI layout conversion, and LoRA key-scheme conversion.
+
 
 ## Install
 
@@ -94,9 +95,14 @@ hfutils convert <sharded_dir> --to single --out <output.safetensors>
 # Merge one component of a pipeline without drilling into the subdir
 hfutils convert <pipeline_dir> --to single --out <output.safetensors> --component transformer
 
+# Convert all (or multiple) components of a pipeline into a flat output directory
+hfutils convert <pipeline_dir> --to single --all --out <output_dir>
+hfutils convert <pipeline_dir> --to single --component transformer --component vae --out <output_dir>
+
 # Write anyway even though a component is incomplete/corrupt or missing entirely
 hfutils convert <pipeline_dir> --to comfyui --root <root> --force
 ```
+
 
 ## Source shapes
 

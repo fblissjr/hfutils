@@ -135,36 +135,67 @@ def _plan_single_from_cli(
     src: Source, source_path: Path,
     *,
     out: Path | None,
-    component: str | None,
+    name: str | None,
+    component: list[str],
+    all_components: bool,
+    only: list[str],
+    skip: list[str],
 ) -> PackPlan:
     _require_option(out, "--out", "single")
+    assert out is not None
 
     if isinstance(src, PipelineSource):
-        if component is None:
+        wants_all = all_components or ("all" in component)
+        selected = [c for c in component if c != "all"]
+
+        for c in selected:
+            if c not in src.components:
+                available = ", ".join(src.components) or "(none detected)"
+                fail(
+                    f"component '{c}' not found in pipeline. "
+                    f"Available: {available}"
+                )
+
+        if not wants_all and not selected:
             available = ", ".join(src.components) or "(none detected)"
             fail(
                 f"source is a diffusers pipeline; "
-                f"pass --component to pick one. Available: {available}"
+                f"pass --component to pick one (repeatable), or --all (with --out <dir>) "
+                f"to convert all components. Available: {available}"
             )
-        if component not in src.components:
-            available = ", ".join(src.components) or "(none detected)"
+
+        if not wants_all and len(selected) == 1 and (out.suffix == ".safetensors" and not out.is_dir()):
+            comp = selected[0]
+            sub_src = detect_source(source_path / comp)
+            if not isinstance(sub_src, (ComponentSource, SafetensorsFileSource)):
+                fail(f"component '{comp}' has no safetensors to merge.")
+            return plan_single(sub_src, out)
+
+        if out.suffix == ".safetensors" and not out.is_dir():
             fail(
-                f"component '{component}' not found in pipeline. "
-                f"Available: {available}"
+                "converting multiple/all pipeline components with `--to single` requires "
+                "`--out` to be an output directory, not a .safetensors file."
             )
-        src = detect_source(source_path / component)
-        if not isinstance(src, (ComponentSource, SafetensorsFileSource)):
-            fail(f"component '{component}' has no safetensors to merge.")
-    elif not isinstance(src, (ComponentSource, SafetensorsFileSource)):
+
+        effective_only = selected or (only or None)
+        resolved_name = name or _default_name(src)
+        return plan_single(
+            src, out,
+            name=resolved_name,
+            only=effective_only,
+            skip=skip or None,
+        )
+
+    if not isinstance(src, (ComponentSource, SafetensorsFileSource)):
         fail(
             f"`--to single` expects a component directory, a "
-            f"single .safetensors file, or a diffusers pipeline (with --component); "
+            f"single .safetensors file, or a diffusers pipeline (with --component or --all); "
             f"got {type(src).__name__}."
         )
-    elif component is not None:
-        fail("--component only applies when source is a diffusers pipeline.")
+    if component or all_components:
+        fail("--component / --all only apply when source is a diffusers pipeline.")
 
-    return plan_single(src, out)  # type: ignore[arg-type]
+    return plan_single(src, out)
 
 
 # --------------------------------------------------------------------------
@@ -192,10 +223,14 @@ def convert(
         case_sensitive=False,
     ),
     # --to single options
-    out: Path | None = typer.Option(None, "--out", help="Output .safetensors file (required for --to single)"),
-    component: str | None = typer.Option(
-        None, "--component",
-        help="When source is a diffusers pipeline: pick one component for --to single.",
+    out: Path | None = typer.Option(None, "--out", help="Output .safetensors file or directory (required for --to single)"),
+    component: list[str] = typer.Option(
+        [], "--component",
+        help="When source is a diffusers pipeline: pick component(s) for --to single (repeatable, or use --all).",
+    ),
+    all_components: bool = typer.Option(
+        False, "--all",
+        help="Convert all pipeline components (with --to single, writes into --out directory).",
     ),
     # Shared
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview plan and metadata, write nothing"),
@@ -216,8 +251,17 @@ def convert(
         )
         done_message = f"Wrote {len(plan)} file(s) under {root}"
     else:  # ConvertLayout.SINGLE
-        plan = _plan_single_from_cli(src, source, out=out, component=component)
-        done_message = f"Wrote {out}"
+        plan = _plan_single_from_cli(
+            src, source,
+            out=out, name=name, component=component,
+            all_components=all_components, only=only, skip=skip,
+        )
+        done_message = (
+            f"Wrote {len(plan)} file(s) under {out}"
+            if len(plan) > 1 or (out is not None and out.is_dir())
+            else f"Wrote {out}"
+        )
+
 
     if not plan:
         fail("Nothing to pack (no matching components found)")

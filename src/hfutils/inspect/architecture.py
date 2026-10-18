@@ -46,6 +46,13 @@ _FAMILY_RULES: list[tuple[str, list]] = [
         re.compile(r".*adaLN_modulation"),
     ]),
 
+    # MOSS-Image (OpenMOSS): shared_block_modulation + layers.N.proj.(ffn_up_gate|qkv_up_gate)
+    ("MOSS-Image", [
+        "shared_block_modulation.",
+        re.compile(r"^layers\.\d+\.proj\.(ffn_up_gate|qkv_up_gate)\."),
+    ]),
+
+
     # AutoencoderKL (Stable Diffusion family VAE): encoder.down_blocks + decoder.up_blocks
     ("AutoencoderKL", [
         "encoder.down_blocks.",

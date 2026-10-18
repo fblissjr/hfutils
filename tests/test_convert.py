@@ -197,6 +197,49 @@ class TestConvertToSingle:
         assert "DRY RUN" in result.output
         assert not out.exists()
 
+    def test_all_flag_converts_all_pipeline_components_to_dir(self, tmp_path):
+        pipeline_dir = tmp_path / "MyPipe"
+        pipeline_dir.mkdir()
+        _make_pipeline(pipeline_dir)
+        out_dir = tmp_path / "out_dir"
+
+        result = runner.invoke(app, [
+            "convert", str(pipeline_dir), "--to", "single",
+            "--all", "--out", str(out_dir),
+        ])
+        assert result.exit_code == 0, result.output
+        assert (out_dir / "MyPipe.safetensors").exists()
+        assert (out_dir / "MyPipe_vae.safetensors").exists()
+        assert (out_dir / "MyPipe_te.safetensors").exists()
+
+    def test_repeatable_component_converts_selected_parts_to_dir(self, tmp_path):
+        pipeline_dir = tmp_path / "MyPipe"
+        pipeline_dir.mkdir()
+        _make_pipeline(pipeline_dir)
+        out_dir = tmp_path / "out_dir"
+
+        result = runner.invoke(app, [
+            "convert", str(pipeline_dir), "--to", "single",
+            "--component", "transformer", "--component", "vae",
+            "--out", str(out_dir), "--name", "Custom",
+        ])
+        assert result.exit_code == 0, result.output
+        assert (out_dir / "Custom.safetensors").exists()
+        assert (out_dir / "Custom_vae.safetensors").exists()
+        assert not (out_dir / "Custom_te.safetensors").exists()
+
+    def test_all_flag_with_safetensors_file_out_errors(self, tmp_path):
+        _make_pipeline(tmp_path)
+        out = tmp_path / "out.safetensors"
+
+        result = runner.invoke(app, [
+            "convert", str(tmp_path), "--to", "single",
+            "--all", "--out", str(out),
+        ])
+        assert result.exit_code != 0
+        assert "directory" in result.output.lower()
+
+
 
 class TestConvertErrorHandling:
     def test_streammergeerror_reported_cleanly_not_as_traceback(self, tmp_path):

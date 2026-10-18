@@ -86,6 +86,19 @@ class TestDetectDiffusionModels:
         result = detect_architecture(names)
         assert result.family == "LTX Video"
 
+    def test_moss_image(self):
+        names = [
+            "shared_block_modulation.weight",
+            "video_head_modulation.weight",
+            "layers.0.proj.ffn_up_gate.weight",
+            "layers.0.attn.q_proj.weight",
+            "patchify_proj.weight",
+            "unpatchify_proj.weight",
+        ]
+        result = detect_architecture(names)
+        assert result.family == "MOSS-Image"
+
+
 
 class TestDetectAdapters:
     def test_lora_ab(self):

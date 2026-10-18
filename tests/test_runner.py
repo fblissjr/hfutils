@@ -186,3 +186,25 @@ class TestPlanRunner:
 
         assert out.exists()
         assert out in manifests
+
+    def test_single_shard_bare_qwen_vlm_still_normalizes_keys(self, tmp_path):
+        """Even when a bare Qwen VLM text encoder is in a single shard (op.kind
+        == 'copy'), PlanRunner must rewrite the header so keys get the outer
+        `model.` prefix rather than byte-copying un-prefixed keys."""
+        src = tmp_path / "te.safetensors"
+        save_file({
+            "language_model.layers.0.linear_attn.A_log": torch.randn(2),
+            "visual.blocks.0.attn.qkv.weight": torch.randn(2, 2),
+        }, src)
+        out = tmp_path / "out.safetensors"
+
+        plan = plan_single(detect_source(src), out)
+        manifests = PlanRunner().run(plan)
+
+        expected = {
+            "model.language_model.layers.0.linear_attn.A_log",
+            "model.visual.blocks.0.attn.qkv.weight",
+        }
+        assert set(manifests[out].keys()) == expected
+        assert set(load_file(str(out)).keys()) == expected
+

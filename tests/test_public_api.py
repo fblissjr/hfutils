@@ -25,6 +25,8 @@ def test_source_types_exported():
 
 def test_stream_merge_exported():
     assert callable(hfutils.stream_merge)
+    assert callable(hfutils.detect_key_prefix_map)
+
 
 
 def test_plan_comfyui_exported():

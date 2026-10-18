@@ -33,6 +33,7 @@ from hfutils.formats.lora import (
 )
 from hfutils.formats.safetensors import (
     Manifest,
+    detect_key_prefix_map,
     manifest_from_shards,
     read_raw_header,
     stream_merge,
@@ -95,6 +96,7 @@ __all__ = [
     "UnknownSource",
     "__version__",
     "convert_lora_keys",
+    "detect_key_prefix_map",
     "detect_lora_scheme",
     "detect_source",
     "enrich",
@@ -107,3 +109,4 @@ __all__ = [
     "stream_merge",
     "verify_output",
 ]
+

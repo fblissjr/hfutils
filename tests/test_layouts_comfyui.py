@@ -273,3 +273,33 @@ class TestPlanComfyuiMissingComponents:
         plan = plan_comfyui(src, tmp_path / "comfy", name="X")
 
         assert plan.missing == []
+
+
+class TestPlanSinglePipeline:
+    def test_pipeline_plans_all_components_into_output_dir(self, tmp_path):
+        from hfutils.layouts.comfyui import plan_single
+
+        _make_pipeline(tmp_path)
+        src = detect_source(tmp_path)
+        out_dir = tmp_path / "out"
+
+        plan = plan_single(src, out_dir, name="MyModel")
+
+        by_label = {op.label: op for op in plan.ops}
+        assert by_label["transformer"].dest == out_dir / "MyModel.safetensors"
+        assert by_label["vae"].dest == out_dir / "MyModel_vae.safetensors"
+        assert by_label["text_encoder"].dest == out_dir / "MyModel_te.safetensors"
+
+    def test_pipeline_plan_single_respects_only_and_skip(self, tmp_path):
+        from hfutils.layouts.comfyui import plan_single
+
+        _make_pipeline(tmp_path)
+        src = detect_source(tmp_path)
+        out_dir = tmp_path / "out"
+
+        plan = plan_single(src, out_dir, name="X", only=["transformer", "vae"])
+        assert sorted(op.label for op in plan.ops) == ["transformer", "vae"]
+
+        plan_skip = plan_single(src, out_dir, name="X", skip=["vae"])
+        assert sorted(op.label for op in plan_skip.ops) == ["text_encoder", "transformer"]
+

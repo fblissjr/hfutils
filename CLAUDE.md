@@ -1,4 +1,4 @@
-Last updated: 2026-07-10
+Last updated: 2026-10-18
 
 # hfutils
 
@@ -19,7 +19,7 @@ hfutils civitai search|info|dl
 ```
 
 `convert --to comfyui` flags: `--root` (required), `--name`, `--only <c>` (repeat), `--skip <c>` (repeat), `--as {diffusion_model|checkpoint|vae|text_encoder|clip|lora}`, `--dry-run`, `--verify`, `--force`.
-`convert --to single` flags: `--out` (required), `--component <c>` (for pipeline sources), `--dry-run`, `--verify`, `--force`.
+`convert --to single` flags: `--out` (required; file or directory), `--component <c>` (repeat, or `all`, for pipeline sources), `--all` (convert all pipeline components into `--out <dir>`), `--name`, `--only <c>` (repeat), `--skip <c>` (repeat), `--dry-run`, `--verify`, `--force`.
 `convert`'s `--force` writes an incomplete/corrupt source anyway (still warns; see "Incomplete/corrupt-source hard-stop" below) -- distinct from `lora convert --force`, which bypasses a scheme-mismatch check instead.
 
 ## Layout
@@ -38,13 +38,13 @@ src/hfutils/
     lora.py               -- `lora` sub-app: convert (key-scheme rename) + schemes
     civitai.py            -- civitai sub-app (search, info, dl)
   formats/
-    safetensors.py        -- stream_merge + verify_output + raw header helpers (pure Python, no torch)
+    safetensors.py        -- stream_merge + detect_key_prefix_map + verify_output + raw header helpers (pure Python, no torch)
     lora.py               -- LoraScheme + LORA_SCHEMES registry + convert_lora_keys (streaming key rename) + fuse_lora (torch, bake into base)
   sources/
     detect.py             -- detect_source(path, level: DetectLevel) + enrich(source) -> EnrichedView + check_shard_integrity(shards) (declared-vs-actual size; also called directly at plan time for single-shard ops, bypassing DetectLevel -- see Conventions)
     types.py              -- Source union + variants (PipelineSource | ComponentSource | SafetensorsFileSource | GgufFileSource | PytorchDirSource | UnknownSource) + IntegrityError + display_kind()
   layouts/
-    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS (keyed on ConvertTarget) + plan_comfyui + plan_single; PackOp has a cached total_bytes and an optional problem (incomplete/corrupt source)
+    comfyui.py            -- DIFFUSERS_COMPONENTS + TARGET_FOLDERS (keyed on ConvertTarget) + plan_comfyui + plan_single (supports PipelineSource, ComponentSource, SafetensorsFileSource); PackOp has a cached total_bytes and an optional problem (incomplete/corrupt source)
     plan.py               -- PackPlan (total_bytes is sum of op.total_bytes, lazily; validate() is CLI-only advisory, broken_ops()/missing are hard-stopped by PlanRunner)
   inspect/
     common.py             -- TensorInfo, SafetensorsHeader (with .combine()), DTYPE_SIZES, QUANT_DTYPE_LABELS, format_size/params, read_json_if_exists
@@ -60,7 +60,7 @@ src/hfutils/
   providers/
     civitai.py            -- CivitaiClient API client
     download.py           -- resumable download + rich progress (uses make_progress)
-tests/                    -- 339 tests, pytest (includes Hypothesis property tests for stream_merge)
+tests/                    -- 349 tests, pytest (includes Hypothesis property tests for stream_merge)
 ```
 
 ## Dev
@@ -91,7 +91,8 @@ tests/                    -- 339 tests, pytest (includes Hypothesis property tes
   - `plan_comfyui` / `plan_single` return `PackPlan`. No filesystem writes.
   - `PlanRunner(observer).run(plan)` executes. Observer receives lifecycle events.
   - CLI wraps with `RichObserver`. Library consumers attach `NullObserver`, `CollectingObserver`, or custom.
-- **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring.
+- **Streaming I/O, not materialization.** `formats/safetensors.stream_merge` is the only code that touches tensor bytes during merge. Do not bring torch or `safetensors.torch.load_file` back into the hot path. `os.copy_file_range` was benchmarked and found slower on local SSDs (write-bound); don't assume it's a win without measuring. `detect_key_prefix_map` automatically rewrites bare `language_model.*`/`visual.*` keys (from `AutoModel`-saved VLM text encoders such as `Qwen3_5Model` in MOSS-Image-Base) to `model.language_model.*`/`model.visual.*` in the safetensors header so ComfyUI's `detect_te_model` and `load_text_encoder_state_dicts` load them without error; `PlanRunner` also routes single-shard (`copy`) ops with a non-empty prefix map through `stream_merge` so the header rewrite happens even for unsharded files.
+
 - **Error hierarchy.** Every `raise` in core modules uses a `HfutilsError` subclass: `PlanError`, `StreamMergeError`, `LoraConvertError`, `InsufficientSpaceError`. File-format parsers (inspect/safetensors, inspect/gguf) keep `ValueError` for malformed-input cases (not hfutils semantics) -- but any call site that reads a header as a *prerequisite* for an hfutils operation (not the operation itself) should go through `inspect/safetensors.read_raw_header_or_raise(path, error_cls=...)` instead of a bare `read_raw_header`, so a truncated/malformed file surfaces as the caller's own `HfutilsError` subclass rather than an uncaught `ValueError`. `commands/*.py` catch the `HfutilsError` hierarchy via `cli_support.cli_guard` (see below), not per-command try/except.
 - **CLI error handling is centralized in `cli_support.py`.** `fail(msg)` prints `[red]Error:[/red] ...` and raises `typer.Exit(1)`; `cli_guard` is a decorator applied to every `@app.command()` that catches `(HfutilsError, OSError)` escaping the command and routes it through `fail()` -- deliberately not a blanket `except Exception`, so a bare `ValueError`/`RuntimeError` (a real bug) still surfaces a full traceback instead of being swallowed as if it were user-facing. `verify_and_report(dest, manifest)` is the shared `--verify` helper (print + `fail()` on mismatch) used by every command that offers `--verify`. Don't hand-roll a local `_error()` or inline try/except in a new command -- use these three.
 - **Progress helpers live in `io/progress.py`.** `RichObserver` uses `make_progress(console)`. The chunked copy loop is in `copy_chunks(src, dst, on_chunk=cb, on_open=cb)`; both `copy_with_progress` and `PlanRunner`'s copy branch use it. `stream_region(fin, fout, size, *, src_desc, on_chunk=None, error_cls=OSError)` is the shared bounded seek-copy primitive (`formats/safetensors.py` and `formats/lora.py` both import it from here -- don't reintroduce a per-module copy). Do not fork twin copies.

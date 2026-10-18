@@ -6,13 +6,14 @@ The CLI wraps this with a RichObserver; library consumers pass NullObserver
 
 from pathlib import Path
 
-from hfutils.errors import PlanError
+from hfutils.errors import PlanError, StreamMergeError
 from hfutils.events import NullObserver, Observer, per_op_merge_observer
 from hfutils.formats.safetensors import (
     Manifest,
-    manifest_from_shards,
+    detect_key_prefix_map,
     stream_merge,
 )
+from hfutils.inspect.safetensors import read_raw_header_or_raise
 from hfutils.io.progress import copy_chunks, unlink_on_error
 from hfutils.layouts.plan import PackPlan
 
@@ -72,13 +73,25 @@ class PlanRunner:
 
                 if op.kind == "copy":
                     src = op.shards[0]
-                    with unlink_on_error(op.dest) as mark_started:
-                        copy_chunks(
-                            src, op.dest,
-                            on_chunk=lambda n, op=op: self.observer.on_op_progress(op, n),
-                            on_open=mark_started,
+                    raw_header = read_raw_header_or_raise(src, error_cls=StreamMergeError)
+                    prefix_map = detect_key_prefix_map([raw_header])
+                    if prefix_map:
+                        manifest = stream_merge(
+                            op.shards, op.dest,
+                            observer=per_op_merge_observer(self.observer, op),
+                            key_prefix_map=prefix_map,
                         )
-                    manifest = manifest_from_shards([src])
+                    else:
+                        with unlink_on_error(op.dest) as mark_started:
+                            copy_chunks(
+                                src, op.dest,
+                                on_chunk=lambda n, op=op: self.observer.on_op_progress(op, n),
+                                on_open=mark_started,
+                            )
+                        manifest = {
+                            entry.name: (entry.dtype, tuple(entry.shape))
+                            for entry in raw_header.tensors
+                        }
                 else:
                     manifest = stream_merge(
                         op.shards, op.dest,
@@ -91,3 +104,4 @@ class PlanRunner:
             self.observer.on_plan_complete(plan, manifests)
 
         return manifests
+

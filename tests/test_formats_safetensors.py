@@ -163,3 +163,57 @@ class TestManifestFromShards:
         bad.write_bytes(b"\x00\x00\x00")
         with pytest.raises(StreamMergeError):
             manifest_from_shards([bad])
+
+
+class TestStreamMergeKeyPrefixNormalization:
+    def test_normalizes_bare_qwen_vlm_text_encoder_prefixes(self, tmp_path):
+        """Diffusers pipelines saving Qwen3_5Model / Qwen3VLModel via AutoModel
+        emit bare `language_model.*` and `visual.*` keys without the outer
+        `model.` prefix that ComfyUI's `detect_te_model` and
+        `load_text_encoder_state_dicts` require."""
+        t1 = {
+            "language_model.embed_tokens.weight": torch.randn(4, 4),
+            "language_model.layers.0.linear_attn.A_log": torch.randn(2),
+            "language_model.layers.0.input_layernorm.weight": torch.randn(4),
+        }
+        t2 = {
+            "visual.blocks.0.attn.qkv.weight": torch.randn(4, 4),
+            "visual.patch_embed.proj.weight": torch.randn(4, 4),
+            "visual.merger.linear_fc1.weight": torch.randn(4, 4),
+        }
+        shards = _write_shards(tmp_path, [t1, t2])
+        out = tmp_path / "te.safetensors"
+
+        manifest = stream_merge(shards, out)
+
+        expected_keys = {
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.layers.0.linear_attn.A_log",
+            "model.language_model.layers.0.input_layernorm.weight",
+            "model.visual.blocks.0.attn.qkv.weight",
+            "model.visual.patch_embed.proj.weight",
+            "model.visual.merger.linear_fc1.weight",
+        }
+        assert set(manifest.keys()) == expected_keys
+        merged = load_file(str(out))
+        assert set(merged.keys()) == expected_keys
+        assert torch.equal(
+            merged["model.language_model.layers.0.linear_attn.A_log"],
+            t1["language_model.layers.0.linear_attn.A_log"],
+        )
+        assert torch.equal(
+            merged["model.visual.patch_embed.proj.weight"],
+            t2["visual.patch_embed.proj.weight"],
+        )
+
+    def test_already_prefixed_qwen_vlm_keys_are_untouched(self, tmp_path):
+        t1 = {
+            "model.language_model.layers.0.linear_attn.A_log": torch.randn(2),
+            "model.visual.blocks.0.attn.qkv.weight": torch.randn(4, 4),
+        }
+        shards = _write_shards(tmp_path, [t1])
+        out = tmp_path / "te.safetensors"
+
+        manifest = stream_merge(shards, out)
+        assert set(manifest.keys()) == set(t1.keys())
+

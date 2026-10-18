@@ -51,9 +51,43 @@ def _merge_metadata(
     return merged, warnings
 
 
+def detect_key_prefix_map(headers: list[RawHeader]) -> dict[str, str]:
+    """Detect if a checkpoint needs key-prefix normalization for ComfyUI.
+
+    Diffusers pipelines that save a VLM text encoder via `AutoModel`
+    (e.g. `Qwen3_5Model` in MOSS-Image-Base, or `Qwen3VLModel`) emit bare
+    `language_model.*` and `visual.*` keys without the outer `model.`
+    wrapper from `*ForConditionalGeneration`. ComfyUI's `detect_te_model`
+    and `load_text_encoder_state_dicts` require `model.language_model.*`
+    and `model.visual.*`.
+    """
+    has_bare_lm = any(
+        t.name.startswith("language_model.layers.")
+        for h in headers for t in h.tensors
+    )
+    has_bare_visual = any(
+        t.name.startswith("visual.")
+        for h in headers for t in h.tensors
+    )
+    if has_bare_lm and has_bare_visual:
+        return {
+            "language_model.": "model.language_model.",
+            "visual.": "model.visual.",
+        }
+    return {}
+
+
+def _apply_key_prefix_map(name: str, key_prefix_map: dict[str, str]) -> str:
+    for src_prefix, dst_prefix in key_prefix_map.items():
+        if name.startswith(src_prefix):
+            return dst_prefix + name[len(src_prefix):]
+    return name
+
+
 def _build_merged_header_json(
     headers: list[RawHeader],
     shard_paths: list[Path],
+    key_prefix_map: dict[str, str] | None = None,
 ) -> tuple[bytes, list[tuple[Path, int, int, int]], list[str]]:
     """Produce the output header JSON and a list of copy plans.
 
@@ -62,19 +96,21 @@ def _build_merged_header_json(
         plan: list of (shard_path, data_region_start + src_offset, size, new_offset)
               describing which bytes from which shard to copy where in the output.
     """
+    prefix_map = key_prefix_map if key_prefix_map is not None else detect_key_prefix_map(headers)
     tensors_json: dict = {}
     plan: list[tuple[Path, int, int, int]] = []
     cursor = 0
 
     for shard_path, header in zip(shard_paths, headers):
         for entry in header.tensors:
-            if entry.name in tensors_json:
+            name = _apply_key_prefix_map(entry.name, prefix_map)
+            if name in tensors_json:
                 raise StreamMergeError(
-                    f"Duplicate tensor '{entry.name}' in shards -- "
+                    f"Duplicate tensor '{name}' in shards -- "
                     f"previously seen, also present in {shard_path.name}"
                 )
             size = entry.data_offset_end - entry.data_offset_start
-            tensors_json[entry.name] = {
+            tensors_json[name] = {
                 "dtype": entry.dtype,
                 "shape": entry.shape,
                 "data_offsets": [cursor, cursor + size],
@@ -105,6 +141,7 @@ def stream_merge(
     output_path: Path,
     *,
     observer: MergeObserver | None = None,
+    key_prefix_map: dict[str, str] | None = None,
 ) -> Manifest:
     """Merge sharded safetensors files into one output, without loading tensors.
 
@@ -128,7 +165,10 @@ def stream_merge(
         raise StreamMergeError("stream_merge requires at least one shard")
 
     headers = [read_raw_header_or_raise(p, error_cls=StreamMergeError) for p in shard_paths]
-    header_bytes, plan, warnings = _build_merged_header_json(headers, shard_paths)
+    prefix_map = key_prefix_map if key_prefix_map is not None else detect_key_prefix_map(headers)
+    header_bytes, plan, warnings = _build_merged_header_json(
+        headers, shard_paths, key_prefix_map=prefix_map,
+    )
 
     for msg in warnings:
         obs.on_warning(msg)
@@ -136,7 +176,7 @@ def stream_merge(
     obs.on_total(sum(size for _, _, size, _ in plan))
 
     manifest: Manifest = {
-        entry.name: (entry.dtype, tuple(entry.shape))
+        _apply_key_prefix_map(entry.name, prefix_map): (entry.dtype, tuple(entry.shape))
         for h in headers for entry in h.tensors
     }
 
@@ -158,6 +198,7 @@ def stream_merge(
                 )
 
     return manifest
+
 
 
 def verify_output(output_path: Path, manifest: Manifest) -> tuple[bool, str | None]:

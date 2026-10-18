@@ -165,8 +165,18 @@ def _missing_components(
     return sorted(missing)
 
 
+def _flat_component_dest(component: str, output_dir: Path, name: str) -> Path:
+    _folder, suffix = DIFFUSERS_COMPONENTS[component]
+    return output_dir / f"{name}{suffix}.safetensors"
+
+
 def _plan_component(
-    source: PipelineSource, component: str, comfyui_root: Path, name: str,
+    source: PipelineSource,
+    component: str,
+    dest_root: Path,
+    name: str,
+    *,
+    dest_fn=_component_dest,
 ) -> PackOp | None:
     """Returns None if the component subdir has no safetensors (e.g. legacy
     .bin-only components in a mixed pipeline). Callers filter None out."""
@@ -178,7 +188,7 @@ def _plan_component(
         label=component,
         source=subdir,
         shards=sub_source.shards,
-        dest=_component_dest(component, comfyui_root, name),
+        dest=dest_fn(component, dest_root, name),
         problem=_source_problem(sub_source),
     )
 
@@ -255,13 +265,42 @@ def plan_comfyui(
             )
 
 
-def plan_single(source: Source, output: Path) -> "PackPlan":
-    """Build a PackPlan with one op: dump the source's safetensors into `output`.
+def plan_single(
+    source: Source,
+    output: Path,
+    *,
+    name: str | None = None,
+    only: list[str] | None = None,
+    skip: list[str] | None = None,
+) -> "PackPlan":
+    """Build a PackPlan for `--to single`.
 
-    Callers ensure `source` is a ComponentSource or SafetensorsFileSource."""
+    - ComponentSource or SafetensorsFileSource: one op writing to `output`.
+    - PipelineSource: one op per matching component writing
+      `<output>/<name>[_vae|_te...].safetensors` into directory `output`.
+    """
     from hfutils.layouts.plan import PackPlan
 
     match source:
+        case PipelineSource(components=components):
+            resolved_name = name or source.path.name
+            ops: list[PackOp] = []
+            for component in components:
+                if component not in DIFFUSERS_COMPONENTS:
+                    continue
+                if only and component not in only:
+                    continue
+                if skip and component in skip:
+                    continue
+                op = _plan_component(
+                    source, component, output, resolved_name,
+                    dest_fn=_flat_component_dest,
+                )
+                if op is not None:
+                    ops.append(op)
+            missing = _missing_components(source, only=only, skip=skip)
+            return PackPlan(ops=ops, source=source, meta={"target": "single"}, missing=missing)
+
         case ComponentSource(path=p, shards=shards):
             op = PackOp(
                 label="single", source=p, shards=list(shards), dest=output,
@@ -274,7 +313,8 @@ def plan_single(source: Source, output: Path) -> "PackPlan":
             )
         case _:
             raise PlanError(
-                f"plan_single expects a ComponentSource or SafetensorsFileSource; "
+                f"plan_single expects a PipelineSource, ComponentSource, or SafetensorsFileSource; "
                 f"got {type(source).__name__}"
             )
     return PackPlan(ops=[op], source=source, meta={"target": "single"})
+

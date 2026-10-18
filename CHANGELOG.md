@@ -9,8 +9,13 @@
 ### Added
 
 - **`hfutils convert --force`**: writes an incomplete/corrupt source anyway instead of refusing (the 0.9.0 hard-stop's default is still to refuse). Never silent about it -- each forced op still prints a warning. `PlanRunner.run(plan, force=True)` for library consumers.
+- **`hfutils convert <pipeline> --to single --all` and repeatable `--component`**: converts all (or multiple selected) pipeline components into an `--out` directory (`<name>.safetensors`, `<name>_vae.safetensors`, `<name>_te.safetensors`) in one pass instead of requiring separate per-component runs. `plan_single` now accepts a `PipelineSource` directly (`name`, `only`, `skip`).
+- **MOSS-Image & unwrapped Qwen VLM text-encoder support**:
+  - `detect_key_prefix_map` (`formats/safetensors.py`) automatically normalizes bare `language_model.*` and `visual.*` keys (from `AutoModel`-saved VLM text encoders such as `Qwen3_5Model` in `OpenMOSS-Team/MOSS-Image-Base`) to `model.language_model.*` and `model.visual.*` in the output safetensors header so ComfyUI's `detect_te_model` and `load_text_encoder_state_dicts` load all tensors cleanly. `PlanRunner` also routes single-shard (`copy`) ops with a non-empty prefix map through `stream_merge`.
+  - `_FAMILY_RULES` (`inspect/architecture.py`) now detects `MOSS-Image` diffusion transformers (`shared_block_modulation.` + `layers.N.proj.(ffn_up_gate|qkv_up_gate).`).
 
 ### Fixed
+
 
 - **`resolve_download`** (CivitAI provider) raised a raw `KeyError` on a CivitAI API response missing an expected key (e.g. `downloadUrl`) -- now raises `ValueError`, which `_api_call` already catches, so a malformed/changed API response reports cleanly instead of crashing. `civitai info`'s own dict indexing gets the same treatment.
 - **`fuse_lora`**'s `st_load`/`safe_open` (the actual torch-side safetensors loading) raised a raw `safetensors.SafetensorError` on a corrupt file -- neither caught by `cli_guard` nor by our own header validation, since `read_raw_header` only parses the JSON header, not the data region (a file truncated just past the header passes our check but fails theirs). Both call sites now re-raise as `LoraConvertError`.
